@@ -2074,7 +2074,7 @@ async function generateAIQuestions() {
 
   try {
     const token = localStorage.getItem('sq_token');
-    const response = await fetch('http://localhost:5000/py-api/ai/generate', {
+    const response = await fetch('/api/ai/generate', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',

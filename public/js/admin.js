@@ -1729,7 +1729,7 @@ async function generateAIQuestions(){
   
   try {
     const token = localStorage.getItem('sq_token');
-    const resp = await fetch('http://localhost:5000/py-api/ai/generate', {
+    const resp = await fetch('/api/ai/generate', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',

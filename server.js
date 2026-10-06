@@ -213,7 +213,7 @@ app.post('/api/ai/generate', async (req, res) => {
       Format: [{"text":"...","options":["A","B","C","D"],"correct":[0],"explanation":"..."}]`;
 
       const data = JSON.stringify({
-        model: 'llama-3.1-8b-instant',
+        model: 'openai/gpt-oss-120b',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7,
         response_format: { type: "json_object" }
