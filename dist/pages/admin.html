@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — SACET Quiz</title>
+<link rel="stylesheet" href="/css/style.css">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* KPI Clickable Styles */
+  .kpi.clickable { cursor: pointer; position: relative; transition: all 0.2s ease; overflow: hidden; }
+  .kpi.clickable:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.3); border-color: rgba(255,255,255,0.2); }
+  .kpi.clickable::after { content: '↗ click'; position: absolute; bottom: 8px; right: 10px; font-size: 9px; opacity: 0; transition: 0.2s; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; }
+  .kpi.clickable:hover::after { opacity: 0.7; }
+  
+  /* Tabs for Template Modal */
+  .modal-tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; gap: 4px; }
+  .modal-tab { padding: 10px 16px; cursor: pointer; font-size: 12px; font-weight: 700; color: var(--muted); border-bottom: 2px solid transparent; transition: 0.2s; }
+  .modal-tab:hover { color: var(--gold); background: rgba(255,255,255,0.03); }
+  .modal-tab.active { color: var(--gold); border-bottom-color: var(--gold); background: rgba(255,215,0,0.05); }
+  
+  /* Template Gate Cards */
+  .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .preset-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 10px; padding: 14px; cursor: pointer; transition: 0.2s; }
+  .preset-card:hover { border-color: var(--gold); background: rgba(255,215,0,0.05); transform: translateY(-2px); }
+  .preset-card .p-title { font-weight: 800; font-size: 13px; color: var(--gold); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+  .preset-card .p-meta { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }
+  
+  /* Auto-set badge */
+  .auto-badge { display: inline-block; background: var(--purple); color: white; font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 800; margin-left: 8px; animation: bounceIn 0.5s; }
+  @keyframes bounceIn { 0% { opacity:0; transform: scale(0.3); } 50% { opacity:1; transform: scale(1.1); } 100% { transform: scale(1); } }
+
+  /* AI Question Preview */
+  .ai-q-card { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 10px; text-align: left; }
+  .ai-q-num { background: var(--primary); color: white; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 10px; margin-right: 8px; font-weight: 800; }
+  .ai-opt { padding: 6px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; border: 1px solid transparent; }
+  .ai-opt.correct { background: rgba(34,197,94,0.15); border-color: #22c55e; color: #22c55e; font-weight: 600; }
+  .ai-expl { font-style: italic; color: var(--muted); font-size: 11px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+  
+  /* Quiz Control Sync Badge */
+  #c-template-badge { display: inline-flex; align-items: center; gap: 5px; background: rgba(240,180,41,0.15); color: var(--gold); border: 1px solid var(--gold); padding: 4px 10px; border-radius: 100px; font-size: 10px; font-weight: 700; margin-left:10px; }
+</style>
+</head>
+
+<body class="admin-page">
+<div id="toast-container"></div>
+
+<div class="app-layout">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sb-brand">
+      <div class="sb-logo">QUIZ</div>
+      <div class="sb-sub">ADMIN PANEL</div>
+      <div id="sb-quiz-id" style="margin-top:10px; padding:4px 8px; background:rgba(240,180,41,0.1); border:1px solid var(--gold); border-radius:4px; font-family:var(--font-t); font-size:10px; color:var(--gold); display:none"></div>
+    </div>
+    <nav class="sb-nav">
+      <div class="nav-item active" data-sec="dashboard" onclick="goSection('dashboard')"><i>📊</i><span>Dashboard</span></div>
+      <div class="nav-item" data-sec="users" onclick="goSection('users')"><i>👤</i><span>Users</span></div>
+      <div class="nav-item" data-sec="teams" onclick="goSection('teams')"><i>👥</i><span>Teams</span></div>
+      <div class="nav-item" data-sec="rounds" onclick="goSection('rounds')"><i>🔄</i><span>Rounds</span></div>
+      <div class="nav-item" data-sec="questions" onclick="goSection('questions')"><i>❓</i><span>Questions</span></div>
+      <div class="nav-item" data-sec="control" onclick="goSection('control')"><i>🎯</i><span>Quiz Control</span></div>
+      <div class="nav-item" data-sec="camera" onclick="openCameraMonitor()"><i>📷</i><span>Camera Monitor <span id="cam-alert-badge" class="badge badge-red hidden" style="font-size:8px;padding:1px 5px">0</span></span></div>
+      <div class="nav-item" data-sec="activity" onclick="goSection('activity')"><i>📜</i><span>Activity</span></div>
+      <div class="nav-item" data-sec="reports" onclick="goSection('reports')"><i>📊</i><span>Reports</span></div>
+      <div class="nav-item" data-sec="settings" onclick="goSection('settings')"><i>⚙️</i><span>Settings</span></div>
+      <div class="nav-item" style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.05); padding-top:15px; color:var(--gold)" onclick="openGuidanceModal()"><i>📖</i><span>Admin Guidance</span></div>
+    </nav>
+
+    <div class="sb-foot">
+      <div class="sb-clock" id="sb-clock"></div>
+      <button class="btn-sm btn-red full-w" onclick="adminLogout()">LOGOUT</button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main-area">
+    <!-- ADMIN CONTEXT HEADER -->
+    <header class="admin-top-bar">
+      <div class="atb-left">
+        <h1 id="atb-college-name">DASHBOARD</h1>
+        <div class="atb-details">
+          <span class="badge badge-purple" id="atb-college-code">QUIZ</span>
+          <span class="text-muted" style="font-size:11px; font-weight:600">ADMIN: <span id="atb-admin-name" style="color:var(--primary)">...</span> <span id="atb-admin-id" class="text-xs" style="opacity:0.6; margin-left:5px"></span></span>
+        </div>
+      </div>
+      <div class="atb-right">
+        <div class="atb-quiz-id">
+          <small>QUIZ ID</small>
+          <span id="atb-quiz-id-val">—</span>
+        </div>
+        <button class="btn-sm btn-gold" style="height:36px; padding:0 15px; margin-left:12px" onclick="window.location.reload()">🔄 REFRESH</button>
+        <button class="btn-sm btn-cyan" style="margin-left:12px; height:36px; padding:0 15px" onclick="openLiveFeed()">📺 LIVE FEED</button>
+        <button id="btn-admin-mic" class="btn-sm btn-red" style="margin-left:12px; height:40px; width:40px; border-radius:50%; padding:0" onmousedown="startMicBroadcast()" onmouseup="stopMicBroadcast()" ontouchstart="startMicBroadcast()" ontouchend="stopMicBroadcast()" title="Hold to speak to all teams">🎤</button>
+      </div>
+
+
+    </header>
+    <div id="quiz-map-container"></div>
+    <!-- DASHBOARD -->
+    <section class="sec" id="sec-dashboard">
+      <div class="sec-head"><h2>DASHBOARD</h2></div>
+      <div class="kpi-row" id="kpi-row"></div>
+
+      <div class="dash-grid">
+        <div class="card">
+          <div class="card-head"><span class="card-title">QUIZ STATUS</span><span id="d-status-badge"></span></div>
+          <div id="d-quiz-info" class="info-list"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">TEAM LOGIN STATUS</span></div>
+          <div id="d-login-status" style="padding:10px;display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
+      </div>
+      <div class="card mt-2">
+        <div class="card-head"><span class="card-title">LIVE SCORES</span></div>
+        <div id="d-scores" style="padding:8px"></div>
+      </div>
+      <div class="card mt-2">
+        <div class="card-head"><span class="card-title">TEAM ACTIVITY BREAKDOWN</span></div>
+        <div id="d-team-activity" class="team-activity-grid"></div>
+      </div>
+      <div class="card mt-2">
+        <div class="card-head"><span class="card-title">RECENT ACTIVITY</span></div>
+        <div class="activity-feed" id="d-activity"></div>
+      </div>
+      <div class="dash-grid mt-2">
+        <div class="card">
+          <div class="card-head"><span class="card-title">⚡ FIRST RESPONDERS (TOP 10 SPEED)</span></div>
+          <div id="d-speed-winners" style="padding:8px"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">🔑 LOGIN HISTORY & RANGE</span></div>
+          <div id="d-login-records" style="padding:10px;max-height:300px;overflow-y:auto"></div>
+        </div>
+      </div>
+      <div class="card mt-2">
+        <div class="card-head"><span class="card-title">PARTICIPANT FEEDBACK</span></div>
+        <div id="d-feedback" style="padding:10px;max-height:300px;overflow-y:auto"></div>
+      </div>
+      <div class="dash-grid mt-2">
+        <div class="card">
+          <div class="card-head"><span class="card-title">📈 performance OVERVIEW</span></div>
+          <div style="padding:15px">
+            <div id="d-perform-summary" class="info-list"></div>
+            <button class="btn-main mt-1" style="height:34px; font-size:11px" onclick="goSection('reports'); generateDetailedReport()">VIEW DETAILED ANALYSIS</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">🏆 TOP 5 PERFORMERS</span></div>
+          <div id="d-top-performers" style="padding:8px"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec hidden" id="sec-users">
+      <div class="sec-head">
+        <h2>USER MANAGEMENT</h2>
+        <div style="display:flex; gap:8px">
+          <button id="btn-delete-multi" class="btn-sm btn-red hidden" onclick="deleteSelectedUsers()">🗑️ DELETE SELECTED</button>
+          <button class="btn-sm btn-cyan" onclick="openAddUser()">+ NEW USER</button>
+        </div>
+      </div>
+      <div class="card"><div id="users-table"></div></div>
+    </section>
+
+    <!-- TEAMS -->
+    <section class="sec hidden" id="sec-teams">
+      <div class="sec-head">
+        <h2>TEAM MANAGEMENT</h2>
+        <div style="display:flex; gap:8px">
+          <button class="btn-sm btn-gold" onclick="openAutoTeamsModal()">⚡ AUTO SETUP</button>
+          <button class="btn-sm btn-red" onclick="openEliminationModal()">🚫 ELIMINATE TEAMS</button>
+          <button class="btn-sm btn-cyan" onclick="openAddTeam()">+ NEW TEAM</button>
+        </div>
+      </div>
+      <div class="card"><div id="teams-table"></div></div>
+    </section>
+
+    <!-- ROUNDS -->
+    <section class="sec hidden" id="sec-rounds">
+      <div class="sec-head">
+        <h2>ROUND MANAGEMENT</h2>
+        <div style="display:flex; gap:8px">
+          <button class="btn-sm btn-gold" onclick="openTemplatesModal('gate')">🏛️ TEMPLATE GATE</button>
+          <button class="btn-sm btn-gold" onclick="openTemplatesModal('quick')">⚡ QUICK TEMPLATES</button>
+          <button id="btn-rounds-delete-multi" class="btn-sm btn-red hidden" onclick="deleteSelectedRounds()">🗑️ DELETE SELECTED</button>
+          <button class="btn-sm btn-red" onclick="resetAllRounds()">🔄 RESET ALL</button>
+          <button class="btn-sm btn-cyan" onclick="openAddRound()">+ ADD ROUND</button>
+        </div>
+      </div>
+      <div class="card mb-2"><div class="card-head"><span class="card-title">OVERVIEW</span></div><div id="rounds-overview" class="p-12 text-sm text-muted"></div></div>
+      <div class="card"><div id="rounds-table"></div></div>
+    </section>
+
+    <!-- QUESTIONS -->
+    <section class="sec hidden" id="sec-questions">
+      <div class="sec-head"><h2>QUESTION BANK</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="q-round-filter" class="filter-select" onchange="renderQuestions()"><option value="">All Rounds</option></select>
+          <button class="btn-sm btn-purple" onclick="openAIGenModal()">🤖 AI GENERATE</button>
+          <button class="btn-sm btn-gold" onclick="openUpload()">📎 UPLOAD CSV</button>
+          <button id="btn-questions-delete-multi" class="btn-sm btn-red hidden" onclick="deleteSelectedQuestions()">🗑️ DELETE SELECTED</button>
+          <button class="btn-sm btn-red" onclick="resetAllQuestions()">🔄 RESET ALL</button>
+          <button class="btn-sm btn-cyan" onclick="openAddQ()">+ ADD QUESTION</button>
+        </div>
+      </div>
+      <div class="card mb-2"><div id="q-summary" class="p-12 text-sm"></div></div>
+      <div class="card"><div id="questions-table"></div></div>
+    </section>
+
+    <!-- QUIZ CONTROL -->
+    <section class="sec hidden" id="sec-control">
+      <div class="sec-head"><h2>QUIZ CONTROL</h2></div>
+      <div class="ctrl-bar">
+        <div class="status-pill"><span class="sdot" id="c-dot"></span><span class="font-title text-xs" id="c-status-txt">IDLE</span></div>
+        <span id="c-template-badge" class="badge badge-purple hidden" style="background:rgba(163, 73, 229, 0.1); border:1px solid var(--primary); color:var(--primary); margin-left:10px; font-size:9px"></span>
+        <span id="c-round-info" class="badge badge-purple" style="display:none"></span>
+        <button class="btn-sm btn-purple" onclick="openTemplatesModal()" style="margin-right:6px">📋 TEMPLATES</button>
+        <button class="btn-sm btn-green" id="btn-start" onclick="quizStart()">▶ START</button>
+
+        <button class="btn-sm btn-cyan hidden" id="btn-begin" onclick="beginRound()">▶ BEGIN ROUND</button>
+        <button class="btn-sm btn-gold hidden" id="btn-pause" onclick="quizPause()">⏸ PAUSE</button>
+        <button class="btn-sm btn-cyan hidden" id="btn-resume" onclick="quizResume()">▶ RESUME</button>
+        <button class="btn-sm hidden" id="btn-next" onclick="quizNext()">⏭ NEXT Q</button>
+        <button class="btn-sm btn-red hidden" id="btn-end-round" onclick="endRound()">🏁 END ROUND</button>
+        <button class="btn-sm btn-red" id="btn-next-round" onclick="announceWinner()" style="margin-right:6px">🏆 ANNOUNCE WINNER</button>
+        <button class="btn-sm btn-red" onclick="quizReset()">🔄 RESET</button>
+      </div>
+
+
+      <div class="ctrl-grid">
+        <div class="ctrl-main">
+          <div class="card">
+            <div class="card-head"><span class="card-title">CURRENT QUESTION</span><span id="c-q-badge"></span></div>
+            <div id="c-question-view" style="padding:14px"></div>
+          </div>
+          <!-- Participant turn timer (prominent) -->
+          <div class="card" id="c-pt-wrap" style="display:none;border-color:var(--purple)">
+            <div class="card-head" style="background:rgba(168,85,247,.1)"><span class="card-title" style="color:var(--purple)">📢 PARTICIPANT TURN TIMER</span></div>
+            <div style="padding:10px 14px;text-align:center">
+              <div class="timer-big" id="c-participant-timer">—</div>
+              <div class="tbar-wrap"><div class="tbar" id="c-pt-bar" style="width:100%"></div></div>
+              <div class="text-xs text-muted mt-1">Participants are answering. Next question starts when timer hits 0.</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-title">PASS CHAIN</span></div>
+            <div id="c-pass-chain" style="padding:10px"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-title">TEAM ANSWERS THIS Q</span></div>
+            <div id="c-team-answers" style="padding:10px;max-height:180px;overflow-y:auto"></div>
+          </div>
+        </div>
+        <div class="ctrl-side">
+          <div class="card" style="border-color:var(--gold)">
+            <div class="card-head" style="background:rgba(255,215,0,0.1)"><span class="card-title" style="color:var(--gold)">🚨 AD-HOC COMMANDS</span></div>
+            <div style="padding:14px; display:flex; flex-direction:column; gap:8px">
+              <div style="display:flex;gap:5px">
+                <input type="text" id="cmd-broadcast-msg" placeholder="Message to all teams..." style="flex:1">
+                <button class="btn-sm btn-gold" onclick="sendGlobalMsg()">📢 SEND</button>
+              </div>
+              <div class="divider" style="margin:5px 0"></div>
+              <div class="text-xs text-muted mb-1">TEAM-SPECIFIC CONTROL</div>
+              <select id="cmd-target-team" class="full-w mb-1"><option value="">Select Team...</option></select>
+              <div style="display:flex; gap:5px">
+                <button class="btn-sm btn-red" style="flex:1" onclick="cmdAction('warn')">⚠️ WARN</button>
+                <button class="btn-sm btn-purple" style="flex:1" id="btn-cmd-hold" onclick="cmdAction('hold')">🛑 HOLD</button>
+                <button class="btn-sm btn-cyan" style="flex:1" onclick="cmdAction('msg')">💬 MSG</button>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+
+            <div class="card-head"><span class="card-title">QUESTION TIMER</span></div>
+            <div style="padding:10px 14px">
+              <div class="timer-big" id="c-timer">—</div>
+              <div class="tbar-wrap"><div class="tbar" id="c-tbar" style="width:100%"></div></div>
+              <div id="c-round-timer-info" class="text-xs text-muted text-center mt-1"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-title">COMPETITION CLOCK</span></div>
+            <div style="padding:10px;text-align:center">
+              <div class="comp-timer" id="c-comp-clock">00:00</div>
+              <div class="text-xs text-muted mt-1" id="c-comp-label">Not started</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-title">ACTIVE TEAM</span></div>
+            <div style="padding:10px;text-align:center">
+              <div class="text-muted text-xs font-title">ANSWERING NOW</div>
+              <div class="font-title text-gold" style="font-size:17px;margin-top:5px" id="c-active-team">—</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-title">TEAM LOGIN STATUS</span></div>
+            <div id="c-login-status" style="padding:8px;display:flex;flex-direction:column;gap:5px"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><span class="card-title">SCOREBOARD</span></div>
+            <div id="c-scores" style="padding:8px"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CAMERA MONITOR -->
+    <section class="sec hidden" id="sec-camera">
+      <div class="sec-head"><h2>CAMERA MONITOR</h2><div style="display:flex;gap:8px"><button class="btn-sm btn-red" onclick="Store.clearAlerts();renderCamera()">CLEAR ALERTS</button></div></div>
+      <div class="card mb-2" style="border-color:var(--red)">
+        <div class="card-head" style="background:rgba(255,51,102,.06)"><span class="card-title" style="color:var(--red)">⚠ ALERTS</span><span id="cam-alert-count" class="badge badge-red">0</span></div>
+        <div id="cam-alerts" style="padding:8px;max-height:200px;overflow-y:auto"></div>
+      </div>
+      <div class="card-head" style="padding:0 0 10px"><span class="card-title">LIVE FEEDS</span><span class="text-xs text-muted">Feeds update every ~3 seconds when teams have camera enabled</span></div>
+      <div id="cam-grid" class="cam-grid"></div>
+    </section>
+
+    <!-- ACTIVITY -->
+    <section class="sec hidden" id="sec-activity">
+      <div class="sec-head"><h2>ACTIVITY LOG</h2><button class="btn-sm btn-red" onclick="clearLog()">CLEAR</button></div>
+      <div class="card"><div class="activity-feed" id="full-activity" style="max-height:640px"></div></div>
+    </section>
+
+    <!-- REPORTS -->
+    <section class="sec hidden" id="sec-reports">
+      <div class="sec-head"><h2>REPORTS & ANALYTICS</h2>
+        <div style="display:flex;gap:8px">
+          <button class="btn-sm btn-cyan" onclick="generateReport('summary')">GIVE SUMMARY REPORT</button>
+          <button class="btn-sm btn-purple" onclick="generateReport('individual')">INDIVIDUAL ANALYTICS</button>
+          <button class="btn-sm btn-gold" onclick="generateReport('overall')">GIVE OVERALL REPORT</button>
+          <button class="btn-sm btn-purple" onclick="generateDetailedReport()">DETAILED PERFORMANCE REPORT</button>
+        </div>
+      </div>
+      <div class="dash-grid">
+        <div class="card">
+          <div class="card-head"><span class="card-title">REPORT PREVIEW</span><div id="report-type-badge"></div></div>
+          <div id="report-view" class="p-12 overflow-x-auto" style="min-height:200px">
+            <div class="text-center text-muted py-5">Click a button above to generate a report</div>
+          </div>
+          <div id="report-actions" class="p-12 border-t hidden" style="display:flex; gap:10px">
+            <button class="btn-main btn-green" onclick="saveReportToDB()" style="flex:1">SAVE TO DATABASE</button>
+            <button class="btn-main btn-cyan" onclick="downloadReport()" style="flex:1">DOWNLOAD HTML</button>
+            <button class="btn-main btn-gold" onclick="exportCSV()" style="flex:1">EXPORT CSV</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">SAVED REPORTS</span></div>
+          <div id="saved-reports-list" class="p-12"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="sec hidden" id="sec-settings">
+      <div class="sec-head"><h2>SETTINGS</h2></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:860px">
+        <div class="card">
+          <div class="card-head"><span class="card-title">ADMIN CREDENTIALS</span></div>
+          <div style="padding:14px">
+            <div class="form-group"><label>ADMIN USERNAME</label><input type="text" id="s-admin-user"></div>
+            <div class="form-group"><label>ADMIN PASSWORD</label><input type="password" id="s-admin-pw"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">QUIZ SETTINGS</span></div>
+          <div style="padding:14px">
+            <div class="form-group"><label>CAPTCHA CODE (for viewers)</label><input type="text" id="s-captcha"></div>
+            <div class="form-group"><label>DEFAULT TIME / QUESTION (secs)</label><input type="number" id="s-q-time" min="5"></div>
+            <div class="form-group"><label>PARTICIPANT ANSWER TIME (secs)</label><input type="number" id="s-p-time" min="5"></div>
+            <div class="form-group"><label>OVERALL TIME LIMIT (minutes, 0=none)</label><input type="number" id="s-overall-time" min="0"></div>
+            <div class="form-group"><label>GLOBAL INSTRUCTIONS</label><textarea id="s-instructions" rows="4" placeholder="Enter instructions shown to all teams..."></textarea></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">COMPETITION PRIZES (TOP 3)</span></div>
+          <div style="padding:16px">
+            <div class="form-group"><label>1st PRIZE</label><input type="text" id="s-prize-1"></div>
+            <div class="form-group"><label>2nd PRIZE</label><input type="text" id="s-prize-2"></div>
+            <div class="form-group"><label>3rd PRIZE</label><input type="text" id="s-prize-3"></div>
+          </div>
+        </div>
+      </div>
+      <button class="btn-sm btn-gold mt-2" onclick="saveSettings()">SAVE SETTINGS</button>
+    </section>
+
+  </main>
+</div>
+
+<!-- AUTO TEAM MODAL -->
+<div class="modal-bg" id="modal-auto-teams">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-head"><span>⚡ SMART TEAM GENERATOR</span><button class="modal-x" onclick="closeModal('modal-auto-teams')">✕</button></div>
+    
+    <div class="text-xs text-muted mb-2 font-title">1. FILTER PARTICIPANTS</div>
+    <div class="frow">
+      <div class="form-group"><label>COLLEGE (leave blank for all)</label><input type="text" id="at-college" placeholder="e.g. SACET"></div>
+      <div class="form-group"><label>DEPARTMENT</label><input type="text" id="at-dept" placeholder="e.g. Mechanical"></div>
+    </div>
+    <div class="form-group">
+      <label>YEAR</label>
+      <select id="at-year">
+        <option value="">All Years</option>
+        <option value="1">1st Year</option>
+        <option value="2">2nd Year</option>
+        <option value="3">3rd Year</option>
+        <option value="4">4th Year</option>
+      </select>
+    </div>
+
+    <div class="text-xs text-muted mt-3 mb-2 font-title">2. GROUPING CONFIG</div>
+    <div class="frow">
+      <div class="form-group">
+        <label>GROUP BY</label>
+        <select id="at-mode">
+          <option value="count">Target Number of Teams</option>
+          <option value="size">Participants Per Team</option>
+        </select>
+      </div>
+      <div class="form-group"><label>VALUE</label><input type="number" id="at-val" min="1" value="5"></div>
+    </div>
+
+    <p class="text-xs text-muted mb-2">Note: Online participants will be prioritized. Team leaders are auto-selected.</p>
+    <div id="at-err" class="err-msg"></div>
+    <button class="btn-main btn-gold" onclick="generateAutoTeams()">GENERATE & NOTIFY TEAMS</button>
+  </div>
+</div>
+
+<!-- QUICK TEMPLATES MODAL -->
+<!-- ELIMINATION MODAL -->
+<div class="modal-bg" id="modal-elimination">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-head"><span>🚫 TOURNAMENT ELIMINATION</span><button class="modal-x" onclick="closeModal('modal-elimination')">✕</button></div>
+    <p class="text-sm text-muted mb-3">Filter teams based on current standings to eliminate them from the next stage.</p>
+    
+    <div class="form-group">
+      <label>ELIMINATION CRITERIA</label>
+      <select id="el-criteria">
+        <option value="bottom">Eliminate Bottom X Teams</option>
+        <option value="top">Keep Only Top X Teams</option>
+        <option value="score">Eliminate Teams with Score below X</option>
+      </select>
+    </div>
+    <div class="form-group"><label>VALUE (X)</label><input type="number" id="el-val" min="1" value="5"></div>
+    
+    <div class="info-box mb-3">
+      <div class="text-xs font-title text-gold">PROPRIETARY LOGIC</div>
+      <p class="text-xs text-muted">Eliminated teams will be marked as "inactive" and won't appear in upcoming rounds. Their scores will be preserved in reports.</p>
+    </div>
+
+    <div id="el-err" class="err-msg"></div>
+    <button class="btn-main btn-red" onclick="runElimination()">ELIMINATE NOW</button>
+  </div>
+</div>
+
+<!-- QUICK TEMPLATES MODAL -->
+<div class="modal-bg" id="modal-templates">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-head">
+      <h3>TEMPLATE MANAGEMENT</h3>
+      <button class="modal-x" onclick="closeModal('modal-templates')">&times;</button>
+    </div>
+    
+    <div class="login-tabs mb-2">
+      <button class="ltab active" id="tab-tmpl-quick" onclick="switchTmplTab('quick')">⚡ QUICK SETUP</button>
+      <button class="ltab" id="tab-tmpl-gate" onclick="switchTmplTab('gate')">🏛️ TEMPLATE GATE</button>
+    </div>
+
+    <div id="panel-tmpl-quick" class="lpanel active">
+      <div class="frow">
+        <div class="form-group">
+          <label>NUMBER OF ROUNDS</label>
+          <input type="number" id="tmpl-rounds" value="5" min="1" max="50" oninput="autoSetTmplTime(); updateTemplatePreview()">
+        </div>
+        <div class="form-group">
+          <label>QUESTIONS PER ROUND</label>
+          <select id="tmpl-qs" onchange="updateTemplatePreview()">
+            <option value="3">3 Questions</option>
+            <option value="5" selected>5 Questions</option>
+            <option value="10">10 Questions</option>
+            <option value="15">15 Questions</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>TOTAL DURATION (MIN) <span id="auto-time-badge" class="badge badge-gold hidden" style="font-size:7px; vertical-align:middle; margin-left:5px">AUTO-SET</span></label>
+          <input type="number" id="tmpl-time" value="30" min="5" max="180" onchange="updateTemplatePreview()">
+        </div>
+      </div>
+      <div id="tmpl-preview" class="suc-msg mb-2"></div>
+      <div id="tmpl-err" class="err-msg"></div>
+      <button class="btn-main btn-cyan" onclick="applyQuizTemplate()">APPLY CUSTOM SETUP</button>
+    </div>
+
+    <div id="panel-tmpl-gate" class="lpanel">
+      <div class="preset-grid">
+        <div class="preset-card" onclick="applyPreset('Classroom Quiz', 3, 15, 5)">
+          <div class="p-title">Classroom Quiz <span>🎓</span></div>
+          <div class="p-meta">
+            <span>🔄 3 Rounds</span>
+            <span>⏱ 15 Minutes</span>
+            <span>❓ 5 Q / Round</span>
+          </div>
+        </div>
+        <div class="preset-card" onclick="applyPreset('Department Level', 5, 30, 5)">
+          <div class="p-title">Department Level <span>🏢</span></div>
+          <div class="p-meta">
+            <span>🔄 5 Rounds</span>
+            <span>⏱ 30 Minutes</span>
+            <span>❓ 5 Q / Round</span>
+          </div>
+        </div>
+        <div class="preset-card" onclick="applyPreset('College Tournament', 10, 45, 5)">
+          <div class="p-title">College Tournament <span>🏆</span></div>
+          <div class="p-meta">
+            <span>🔄 10 Rounds</span>
+            <span>⏱ 45 Minutes</span>
+            <span>❓ 5 Q / Round</span>
+          </div>
+        </div>
+        <div class="preset-card" onclick="applyPreset('Inter-College', 15, 60, 5)">
+          <div class="p-title">Inter-College <span>🌎</span></div>
+          <div class="p-meta">
+            <span>🔄 15 Rounds</span>
+            <span>⏱ 60 Minutes</span>
+            <span>❓ 5 Q / Round</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-user">
+  <div class="modal">
+    <div class="modal-head"><span id="user-modal-title">CREATE USER</span><button class="modal-x" onclick="closeModal('modal-user')">✕</button></div>
+    <input type="hidden" id="um-id">
+    <div class="form-group"><label>FULL NAME</label><input type="text" id="um-name" placeholder="Full name"></div>
+    <div class="form-group"><label>ROLL NUMBER</label><input type="text" id="um-roll" placeholder="Roll number"></div>
+    <div class="frow">
+      <div class="form-group"><label>USERNAME</label><input type="text" id="um-user" placeholder="Username"></div>
+      <div class="form-group"><label>PASSWORD</label><input type="text" id="um-pass" placeholder="Password"></div>
+    </div>
+    <div class="frow">
+      <div class="form-group"><label>COLLEGE</label><input type="text" id="um-college" placeholder="College name"></div>
+      <div class="form-group"><label>DEPARTMENT</label><input type="text" id="um-dept" placeholder="e.g. Mechanical"></div>
+    </div>
+    <div class="frow">
+      <div class="form-group">
+        <label>YEAR</label>
+        <select id="um-year">
+          <option value="1">1st Year</option>
+          <option value="2">2nd Year</option>
+          <option value="3">3rd Year</option>
+          <option value="4">4th Year</option>
+          <option value="0">N/A (Faculty/Staff)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>ROLE</label>
+        <select id="um-role">
+          <option value="user">User</option>
+          <option value="participant">Participant</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+    </div>
+    <div id="um-err" class="err-msg"></div>
+    <button class="btn-main btn-green" onclick="saveUser()">SAVE USER</button>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-team">
+  <div class="modal">
+    <div class="modal-head"><span id="team-modal-title">CREATE TEAM</span><button class="modal-x" onclick="closeModal('modal-team')">✕</button></div>
+    <input type="hidden" id="tm-id">
+    <div id="team-modal-body"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-round">
+  <div class="modal">
+    <div class="modal-head"><span id="round-modal-title">ADD ROUND</span><button class="modal-x" onclick="closeModal('modal-round')">✕</button></div>
+    <input type="hidden" id="rm-id">
+    <div class="form-group"><label>ROUND NAME</label><input type="text" id="rm-name" placeholder="e.g. General Knowledge"></div>
+    <div class="frow">
+      <div class="form-group"><label>ROUND NUMBER</label><input type="number" id="rm-num" min="1" placeholder="1"></div>
+      <div class="form-group">
+        <label>TOURNAMENT STAGE</label>
+        <select id="rm-stage">
+          <option value="Preliminary">Preliminary Stage</option>
+          <option value="Selection">Selection Stage</option>
+          <option value="Final">Final Stage</option>
+        </select>
+      </div>
+      <div class="form-group"><label>QUESTIONS</label><input type="number" id="rm-qcount" min="1" placeholder="5"></div>
+    </div>
+    <div class="form-group"><label>INSTRUCTIONS (shown before round)</label><textarea id="rm-instr" rows="5" placeholder="Enter round instructions..."></textarea></div>
+    <div class="frow">
+      <div class="form-group"><label>TIME / QUESTION (secs)</label><input type="number" id="rm-qtime" min="5" placeholder="60"></div>
+      <div class="form-group"><label>ROUND TIME LIMIT (mins, 0=none)</label><input type="number" id="rm-rtime" min="0" placeholder="0"></div>
+    </div>
+    <div id="rm-err" class="err-msg"></div>
+    <button class="btn-main btn-green" onclick="saveRound()">SAVE ROUND</button>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-question">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-head"><span id="q-modal-title">ADD QUESTION</span><button class="modal-x" onclick="closeModal('modal-question')">✕</button></div>
+    <input type="hidden" id="qm-id">
+    <div class="form-group"><label>QUESTION TEXT</label><textarea id="qm-text" rows="3" placeholder="Type your question..."></textarea></div>
+    <div class="frow">
+      <div class="form-group"><label>TYPE</label><select id="qm-type" onchange="renderOptFields()"><option value="single">Single Correct</option><option value="multiple">Multiple Correct</option></select></div>
+      <div class="form-group"><label>ASSIGN TO ROUND</label><select id="qm-round"><option value="">Auto</option></select></div>
+    </div>
+    <div id="qm-opts"></div>
+    <div class="form-group"><label>EXPLANATION (optional)</label><textarea id="qm-expl" rows="2" placeholder="Brief explanation..."></textarea></div>
+    <div id="qm-err" class="err-msg"></div>
+    <button class="btn-main btn-green" onclick="saveQuestion()">SAVE QUESTION</button>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-upload">
+  <div class="modal">
+    <div class="modal-head"><span>UPLOAD QUESTIONS</span><button class="modal-x" onclick="closeModal('modal-upload')">✕</button></div>
+    <p class="text-xs text-muted mb-1">Format (Pipe Separated):</p>
+    <code class="code-hint" style="display:block; margin-bottom:10px">Question | Option A | Option B | Option C | Option D | CorrectAnswer</code>
+    
+    <p class="text-xs text-muted mb-1">Example (Single Correct):</p>
+    <code class="code-hint" style="display:block; margin-bottom:10px; color:var(--cyan)">What is the capital of India?|Delhi|Mumbai|Chennai|Kolkata|A</code>
+    
+    <p class="text-xs text-muted mb-1">Example (Multiple Correct):</p>
+    <code class="code-hint" style="display:block; margin-bottom:10px; color:var(--purple)">Which are programming languages?|Java|Apple|Python|Car|A,C</code>
+
+    <div class="drop-zone" id="drop-zone" onclick="document.getElementById('csv-file').click()"
+         ondragover="event.preventDefault();this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')" ondrop="handleDrop(event)">
+      <div style="font-size:28px;margin-bottom:6px">📁</div>
+      <div class="text-muted text-sm">Click or drag &amp; drop CSV/TXT</div>
+      <input type="file" id="csv-file" style="display:none" accept=".csv,.txt" onchange="handleFileInput(event)">
+    </div>
+    <div id="upload-preview" style="margin-top:12px"></div>
+    <button class="btn-main btn-green mt-2 hidden" id="btn-import" onclick="importQuestions()">IMPORT QUESTIONS</button>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-round-scores">
+  <div class="modal" style="max-width:660px">
+    <div class="modal-head"><span id="rs-title">ROUND COMPLETE!</span><button class="modal-x" onclick="closeModal('modal-round-scores')">✕</button></div>
+    <div id="rs-body"></div>
+    <button class="btn-main btn-cyan mt-2" onclick="closeModal('modal-round-scores')">CLOSE</button>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-ai-gen">
+  <div class="modal" style="max-width:680px; max-height:90vh; overflow-y:auto">
+    <div class="modal-head"><span>🤖 AI QUESTION GENERATOR</span><button class="modal-x" onclick="closeModal('modal-ai-gen')">✕</button></div>
+    <div class="p-3" style="padding:16px">
+      <div class="form-group">
+        <label>SUBJECT / TOPIC</label>
+        <input type="text" id="ai-topic" placeholder="e.g. Thermodynamics, Data Structures, Modern Art...">
+      </div>
+      <div class="frow">
+        <div class="form-group hidden">
+          <label>NUMBER OF QUESTIONS (Auto-assigned)</label>
+          <input type="number" id="ai-count" value="5">
+        </div>
+        <div class="form-group">
+          <label>DIFFICULTY LEVEL</label>
+          <select id="ai-difficulty">
+            <option value="easy">Easy (Basic Recall)</option>
+            <option value="medium">Medium (Applied)</option>
+            <option value="hard">Hard (Advanced)</option>
+            <option value="mixed">Mixed (All Levels)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>ASSIGN TO ROUND (Determines Question Count)</label>
+        <select id="ai-round" onchange="onAIRoundChange()">
+          <option value="">Choose a round...</option>
+        </select>
+      </div>
+      
+      <div id="ai-err" class="err-msg"></div>
+      <button class="btn-main btn-purple full-w" id="btn-ai-gen" onclick="generateAIQuestions()">GENERATE WITH CLAUDE AI</button>
+      
+      <div id="ai-loading" class="hidden mt-3 text-center">
+        <div class="spinner-border text-purple" role="status"></div>
+        <p class="text-xs text-muted mt-2">Claude is thinking... Generating high-quality MCQs.</p>
+      </div>
+
+      <div id="ai-preview-area" class="mt-3 hidden">
+        <div class="font-title text-xs text-gold mb-2">PREVIEW GENERATED QUESTIONS</div>
+        <div id="ai-preview-list" style="margin-top:10px"></div>
+        <button class="btn-main btn-green full-w mt-2" onclick="addAllAIToBank()">ADD ALL TO BANK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-confirm">
+
+    <div class="modal" style="max-width:380px;text-align:center">
+      <div style="font-size:32px;margin-bottom:12px" id="conf-icon">❓</div>
+      <h3 class="font-title text-gold" id="conf-title">ARE YOU SURE?</h3>
+      <p class="text-sm text-muted mt-1" id="conf-msg">This action cannot be undone.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:20px">
+        <button class="btn-sm btn-red" id="btn-conf-yes">YES, PROCEED</button>
+        <button class="btn-sm" onclick="closeModal('modal-confirm')">CANCEL</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-guidance">
+  <div class="modal" style="max-width:640px; max-height:90vh; overflow-y:auto">
+    <div class="modal-head"><span>📖 ADMIN MASTER GUIDANCE</span><button class="modal-x" onclick="closeModal('modal-guidance')">✕</button></div>
+    
+    <div class="font-title text-gold text-xs mb-2" style="letter-spacing:2px; margin-top:10px">📖 TEMPLATE GUIDE — HOW TO CONDUCT</div>
+    
+    <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+      <div class="font-title text-cyan" style="font-size:12px">🏃 3 ROUNDS — STANDARD (15-30 min)</div>
+      <div class="text-xs text-muted mt-1" style="line-height:1.6">
+        <strong>Best for:</strong> Quick classroom quizzes, post-lecture assessments<br>
+        <strong>Structure:</strong> R1: Qualifiers → R2: Knowledge → R3: Finals<br>
+        <strong>How to run:</strong> Start quiz → Begin R1 → End R1 → Eliminate bottom teams → Begin R2 → End R2 → Begin Finals
+      </div>
+    </div>
+
+    <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+      <div class="font-title text-cyan" style="font-size:12px">📝 5 ROUNDS — COMPREHENSIVE (30-45 min)</div>
+      <div class="text-xs text-muted mt-1" style="line-height:1.6">
+        <strong>Best for:</strong> Department-level competitions, inter-class quizzes<br>
+        <strong>Structure:</strong> R1-R2 (Preliminary) → R3-R4 (Selection) → R5 (Final)<br>
+        <strong>How to run:</strong> Run Preliminary → Eliminate weak teams after R2 → Run Selection → Grand Finals in R5
+      </div>
+    </div>
+
+    <div class="font-title text-gold text-xs mb-2 mt-3" style="letter-spacing:2px">📋 STEP-BY-STEP ADMIN WORKFLOW</div>
+    <div style="background:rgba(255,215,0,0.05);border:1px solid rgba(255,215,0,0.2);border-radius:8px;padding:14px">
+      <ol class="text-xs text-muted" style="margin:0;padding-left:18px;line-height:2.0">
+        <li><strong>Select Template</strong> — Choose rounds & time, click APPLY</li>
+        <li><strong>Add Questions</strong> — Go to Questions tab, add or import CSV</li>
+        <li><strong>AI Generate</strong> — Use "🤖 AI GENERATE" for quick set creation</li>
+        <li><strong>Start Quiz</strong> — Go to Quiz Control → Click START QUIZ</li>
+        <li><strong>Conduct Rounds</strong> — Click BEGIN ROUND for each stage</li>
+        <li><strong>Eliminate Teams</strong> — Use the 🚫 ELIMINATE button at stage transitions</li>
+        <li><strong>Finish</strong> — Complete all rounds to generate final scores</li>
+      </ol>
+    </div>
+
+    <div style="background:rgba(168,85,247,0.08);border:1px solid rgba(168,85,247,0.3);border-radius:8px;padding:10px;margin-top:12px">
+      <div class="text-xs" style="color:var(--purple)">
+        <strong>💡 PRO TIP:</strong> The Live Feed button in the header opens a dedicated window for your projector. Extend your display and move the Live Feed window there!
+      </div>
+    </div>
+    
+    <button class="btn-main btn-gold mt-3" onclick="closeModal('modal-guidance')">GOT IT, LET'S GO!</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+
+<script src="/js/storage.js"></script>
+<script src="/js/admin.js"></script>
+</body>
+</html>

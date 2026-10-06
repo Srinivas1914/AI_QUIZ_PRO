@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Team — QUIZ</title>
+<link rel="stylesheet" href="/css/style.css">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="bg-grid"></div>
+<div id="toast-container"></div>
+<div id="hold-overlay" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:9999; display:flex; flex-direction:column; justify-content:center; align-items:center; backdrop-filter:blur(10px)">
+  <div class="timer-num danger" style="font-size:80px">🛑</div>
+  <div class="round-end-badge" style="border-color:var(--red); color:var(--red)">OFFICIALLY HELD</div>
+  <div class="text-muted mt-2">The administrator has paused your interaction.</div>
+</div>
+
+<div id="admin-warning" class="hidden" style="position:fixed; top:20px; left:50%; transform:translateX(-50%); width:90%; max-width:400px; background:var(--red); color:white; padding:15px; border-radius:8px; border:2px solid gold; z-index:10000; box-shadow:0 0 30px rgba(255,0,0,0.5)">
+  <div style="font-weight:bold; display:flex; align-items:center; gap:10px">⚠️ OFFICIAL WARNING <span id="warn-sender"></span></div>
+  <div id="warn-msg" style="margin-top:5px; font-family:var(--font-s)"></div>
+  <button class="btn-sm mt-1" style="background:white; color:var(--red); border:none" onclick="this.parentElement.classList.add('hidden')">DISMISS</button>
+</div>
+<div id="winner-overlay" class="hidden" style="position:fixed; inset:0; background:radial-gradient(circle, #2d3436 0%, #000 100%); z-index:11000; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; padding:20px; animation: fadeIn 1s ease-out">
+  <div style="font-size:120px; filter: drop-shadow(0 0 20px gold); animation: bounce 2s infinite">🏆</div>
+  <div class="font-title text-gold" style="font-size:42px; letter-spacing:4px; margin-top:20px">OFFICIAL WINNER</div>
+  <div id="winner-name" class="welcome-banner" style="font-size:52px; margin:20px 0; color:white; border-bottom:4px solid var(--gold)">TEAM NAME</div>
+  <div id="winner-score" class="badge badge-purple" style="font-size:20px; padding:10px 25px">SCORE: 00</div>
+  <div class="text-muted mt-4 font-body" style="font-size:16px">Congratulations on your outstanding performance!</div>
+  <button class="btn-main btn-cyan mt-4" onclick="document.getElementById('winner-overlay').classList.add('hidden')" style="max-width:200px">CLOSE</button>
+</div>
+<style>
+  @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-20px); } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+</style>
+
+<video id="th-cam-video" autoplay muted playsinline style="display:none"></video>
+<canvas id="th-cam-canvas" style="display:none"></canvas>
+
+<div class="quiz-layout">
+  <header class="quiz-header">
+    <div class="qh-left">
+      <div class="text-xs text-muted font-title">QUIZ</div>
+      <div class="qh-name" id="th-team-name">TEAM</div>
+    </div>
+    <div class="qh-center">
+      <div id="th-admin-context" style="display:none; text-align:center; margin-bottom:5px;">
+        <div class="font-title text-gold" style="font-size:12px;" id="th-college-name">COLLEGE</div>
+        <div class="text-xs text-muted">
+          <span id="th-college-code" class="badge badge-purple" style="font-size:9px; padding:2px 6px;">CODE</span>
+          <span style="margin-left:5px">ADMIN: <span id="th-admin-name" style="color:var(--primary)">NAME</span></span>
+        </div>
+      </div>
+      <div class="comp-clock-sm" id="th-comp-clock">—</div>
+      <div class="text-xs text-muted" id="th-round-info"></div>
+    </div>
+    <div class="qh-right">
+      <div id="th-cam-indicator"></div>
+      <div class="score-chip"><div class="text-xs text-muted">SCORE</div><div class="score-val" id="th-score">0</div></div>
+      <button class="btn-sm" style="margin-right:8px; background:rgba(0,255,255,0.1); border:1px solid var(--cyan); color:var(--cyan)" onclick="window.location.reload()">🔄 REFRESH</button>
+      <button class="btn-sm btn-gold mr-2" onclick="openConductForm()" style="color:#000; font-weight:bold;">CONDUCT A QUIZ</button>
+      <button class="btn-sm btn-red" onclick="doLogout()">EXIT</button>
+    </div>
+  </header>
+  <div id="quiz-map-container"></div>
+  <div class="quiz-body">
+    <div class="quiz-main">
+
+      <!-- WAITING -->
+      <div id="ts-waiting">
+        <div class="center-screen">
+          <div class="welcome-banner" id="th-welcome-msg">WELCOME!</div>
+          <div class="spin"></div>
+          <div id="th-prizes-box" class="prize-card mt-2 hidden"></div>
+          <div id="th-general-instr" class="instr-box hidden"></div>
+        </div>
+      </div>
+
+      <!-- ROUND INTRO -->
+      <div id="ts-round-intro" class="hidden">
+        <div class="center-screen">
+          <div class="round-badge" id="th-ri-name">ROUND 1</div>
+          <div class="text-xs font-title text-muted" style="letter-spacing:3px;margin:10px 0">INSTRUCTIONS</div>
+          <div id="th-ri-instr" class="instr-box"></div>
+          <div class="spin mt-3"></div>
+          <div class="text-muted text-sm mt-1">Waiting for admin to begin...</div>
+        </div>
+      </div>
+
+      <!-- MY TURN -->
+      <div id="ts-myturn" class="hidden">
+        <div class="turn-header">
+          <div>
+            <div class="text-xs font-title text-gold">YOUR TURN!</div>
+            <div class="text-xs font-title text-muted" id="th-q-label">Q1 OF 5</div>
+          </div>
+          <div class="timer-pill">
+            <div class="timer-num" id="th-timer">—</div>
+            <div class="tbar-wrap"><div class="tbar" id="th-tbar" style="width:100%"></div></div>
+          </div>
+        </div>
+        <div class="qcard">
+          <div class="q-text" id="th-q-text">Loading...</div>
+          <div class="opts-grid" id="th-opts"></div>
+          <div class="text-xs text-muted mt-1 hidden" id="th-multi-hint">Select all correct answers</div>
+          <div class="answer-reveal" id="th-reveal"></div>
+        </div>
+        <div class="action-row">
+          <button class="btn-main btn-gold" id="th-btn-pass" onclick="passQ()">↩ PASS</button>
+          <button class="btn-main btn-green" id="th-btn-submit" onclick="submitAns()" disabled>✓ SUBMIT</button>
+        </div>
+      </div>
+
+      <!-- WAITING TURN -->
+      <div id="ts-wait-turn" class="hidden">
+        <div class="card mb-2">
+          <div class="card-head"><span class="card-title">CURRENT QUESTION</span><span class="badge badge-gold" id="th-wt-badge">Team A's Turn</span></div>
+          <div class="qcard" style="background:rgba(0,0,0,.1)">
+            <div class="text-xs font-title text-muted" id="th-wt-qlabel">Q1</div>
+            <div class="q-text" id="th-wt-text">...</div>
+          </div>
+        </div>
+        <div class="card mb-2"><div class="card-head"><span class="card-title">PASS CHAIN</span></div><div id="th-wt-chain" style="padding:10px"></div></div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">TIMER</span></div>
+          <div style="padding:10px;text-align:center">
+            <div class="timer-num" id="th-wt-timer" style="font-size:52px">—</div>
+            <div class="tbar-wrap"><div class="tbar" id="th-wt-tbar" style="width:100%"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PARTICIPANT TURN — visible to all teams with countdown -->
+      <div id="ts-participant-turn" class="hidden">
+        <div class="card" style="border-color:var(--purple)">
+          <div class="card-head" style="background:rgba(168,85,247,.08)">
+            <span class="font-title text-xs" style="color:var(--purple)">📢 PARTICIPANTS ANSWERING</span>
+          </div>
+          <div style="padding:14px" id="th-pt-content">
+            <div class="center-screen" style="min-height:200px">
+              <div class="spin" style="border-top-color:var(--purple)"></div>
+              <div class="text-muted text-sm mt-1">Participants are answering...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ROUND END -->
+      <div id="ts-round-end" class="hidden">
+        <div class="center-screen">
+          <div class="round-end-badge" id="th-re-name">ROUND COMPLETE!</div>
+          <div class="text-xs font-title text-muted" style="letter-spacing:3px;margin:12px 0">STANDINGS</div>
+          <div id="th-re-scores" class="sb-list" style="max-width:520px;width:100%"></div>
+          <div class="text-muted text-sm mt-2" id="th-re-next"></div>
+          <div class="spin mt-3"></div>
+        </div>
+      </div>
+
+      <!-- FINISHED -->
+      <div id="ts-finished" class="hidden">
+        <div class="center-screen" style="border-color:var(--gold)">
+          <div style="font-size:48px;margin-bottom:10px">🏆</div>
+          <div class="round-end-badge" style="border-color:var(--gold);color:var(--gold)">QUIZ COMPLETE!</div>
+          <div class="text-xs font-title text-muted" style="letter-spacing:3px;margin:12px 0">FINAL STANDINGS</div>
+          <div id="th-final-scores" class="sb-list" style="max-width:520px;width:100%"></div>
+          
+          <!-- Feedback Section -->
+          <div id="th-feedback-box" class="card mt-3" style="max-width:520px;width:100%;text-align:left">
+            <div class="card-head"><span class="card-title">SHARE YOUR FEEDBACK</span></div>
+            <div class="p-12">
+              <textarea id="th-f-text" placeholder="Tell us about your experience..." class="form-control mb-2" style="width:100%;background:rgba(0,0,0,.3);color:white;border:1px solid var(--border);padding:10px;border-radius:6px"></textarea>
+              <button class="btn-main btn-cyan" onclick="submitFeedback()">SEND FEEDBACK</button>
+              <div id="th-f-msg" class="suc-msg mt-1 hidden">✓ Feedback sent! Thank you.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <aside class="quiz-side">
+      <div class="card mb-3">
+        <div class="card-head"><span class="card-title">PRIVATE SESSION</span></div>
+        <div class="p-12">
+          <div class="font-title text-center" style="font-size:8px; color:var(--muted); margin-bottom:5px;">ENTER QUIZ ID</div>
+          <input type="text" id="th-align-id" placeholder="ID..." class="form-control mb-2" style="text-align:center; text-transform:uppercase; background:rgba(0,0,0,0.3); color:white; border:1px solid var(--border); border-radius:4px; font-size:12px; height:32px;">
+          <button class="btn-sm btn-cyan full-w" onclick="alignToQuiz()">ALIGN →</button>
+        </div>
+      </div>
+      <div class="card" style="position:sticky;top:0">
+        <div class="card-head"><span class="card-title">SCOREBOARD</span></div>
+        <div id="th-scoreboard" style="padding:8px"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- CONDUCT QUIZ MODAL -->
+<div class="modal-bg" id="modal-conduct">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-head"><span>CONDUCT A QUIZ REQUEST</span><button class="modal-x" onclick="closeModal('modal-conduct')">✕</button></div>
+    <p class="text-sm text-muted mb-3">Fill this form to request access to host a quiz. Superadmin will review your request.</p>
+    
+    <div class="form-group"><label>ADMIN USERNAME</label><input type="text" id="cm-user" placeholder="Desired username"></div>
+    <div class="form-group"><label>ADMIN PASSWORD</label><input type="password" id="cm-pass" placeholder="Desired password"></div>
+    <div class="form-group"><label>COLLEGE NAME</label><input type="text" id="cm-college" placeholder="Full college name"></div>
+    <div class="form-group"><label>COLLEGE CODE</label><input type="text" id="cm-code" placeholder="e.g. ABC123"></div>
+    
+    <div id="cm-err" class="err-msg"></div>
+    <div id="cm-suc" class="suc-msg hidden">✓ Request submitted! Waiting for Superadmin approval.</div>
+    
+    <button class="btn-main btn-gold mt-2" onclick="submitQuizRequest()">SUBMIT REQUEST</button>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/storage.js"></script>
+<script src="/js/team.js"></script>
+</body>
+</html>

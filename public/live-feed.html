@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LIVE FEED — Quiz Tournament</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg-dark: #0a0a0c; --glass: rgba(255,255,255,0.03); }
+    body { background: var(--bg-dark); color: white; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+    
+    .live-layout { display: grid; grid-template-columns: 1fr 340px; gap: 20px; padding: 20px; flex: 1; height: calc(100vh - 80px); }
+    
+    .live-header { height: 80px; background: var(--glass); display: flex; align-items: center; justify-content: space-between; padding: 0 40px; border-bottom: 1px solid var(--border); }
+    .live-logo { font-size: 32px; font-weight: 800; color: var(--gold); letter-spacing: 2px; }
+    
+    .main-stage { background: var(--glass); border: 1px solid var(--border); border-radius: 20px; display: flex; flex-direction: column; padding: 40px; }
+    .q-well { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+    .q-text-big { font-size: 42px; font-weight: 700; line-height: 1.3; margin-bottom: 40px; text-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+    
+    .opts-grid-big { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .opt-big { background: rgba(255,255,255,0.05); border: 2px solid var(--border); border-radius: 12px; padding: 24px; font-size: 24px; display: flex; align-items: center; transition: 0.3s; }
+    .opt-letter { background: var(--primary); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 8px; margin-right: 20px; font-weight: 800; }
+    .opt-big.correct { border-color: #22c55e; background: rgba(34,197,94,0.1); box-shadow: 0 0 20px rgba(34,197,94,0.2); }
+    .opt-big.correct .opt-letter { background: #22c55e; }
+    
+    .sidebar-stage { display: flex; flex-direction: column; gap: 20px; }
+    .side-card { background: var(--glass); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
+    
+    .timer-giant { font-size: 80px; font-weight: 800; font-family: var(--font-t); color: var(--gold); text-align: center; line-height: 1; }
+    .timer-ring { height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; margin-top: 15px; overflow: hidden; }
+    .timer-fill { height: 100%; background: var(--gold); transition: width 0.5s linear; }
+    
+    .active-team-stage { text-align: center; }
+    .active-team-name { font-size: 28px; font-weight: 800; color: var(--cyan); margin-top: 10px; }
+    
+    .sb-row-big { display: flex; align-items: center; gap: 15px; padding: 12px 15px; border-bottom: 1px solid var(--border); }
+    .sb-rank-big { font-size: 20px; width: 30px; font-weight: 800; }
+    .sb-name-big { flex: 1; font-weight: 600; font-size: 16px; }
+    .sb-pts-big { font-size: 22px; font-weight: 800; color: var(--gold); }
+    
+    .camera-box { width: 100%; height: 200px; background: black; border-radius: 12px; margin-top: 15px; overflow: hidden; position: relative; }
+    .camera-label { position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.5); padding: 2px 8px; border-radius: 4px; font-size: 10px; }
+    
+    .stage-badge { background: var(--gold); color: black; font-weight: 800; font-size: 12px; padding: 4px 12px; border-radius: 100px; text-transform: uppercase; }
+    
+    .msg-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 100; display: none; }
+    .msg-well { text-align: center; }
+    .msg-title { font-size: 64px; font-weight: 800; color: var(--gold); margin-bottom: 20px; }
+    .msg-body { font-size: 24px; color: var(--muted); }
+  </style>
+</head>
+<body class="live-feed">
+  <header class="live-header">
+    <div class="live-logo">QUIZ TOURNAMENT</div>
+    <div style="display:flex; align-items:center; gap:20px">
+      <div class="stage-badge" id="live-stage">SELECTION STAGE</div>
+      <div style="font-size: 20px; font-weight: 600" id="live-round">ROUND 1</div>
+      <div style="display:flex; align-items:center; gap:10px; margin-left:20px">
+        <select id="live-cmd-target" class="btn-sm" style="background:rgba(255,255,255,0.05); color:white; border:1px solid var(--border); border-radius:4px; height:36px; padding:0 10px">
+          <option value="all">ALL TEAMS</option>
+        </select>
+        <button id="btn-live-mic" class="btn-sm btn-red" style="height:40px; width:40px; border-radius:50%; padding:0" onmousedown="startMicBroadcast()" onmouseup="stopMicBroadcast()" ontouchstart="startMicBroadcast()" ontouchend="stopMicBroadcast()" title="Hold to speak to teams">🎤</button>
+      </div>
+    </div>
+
+  </header>
+
+  <div class="live-layout">
+    <main class="main-stage">
+      <div class="q-well" id="q-area">
+        <!-- Question content -->
+        <div class="q-text-big" id="q-text">Waiting for the next question...</div>
+        <div class="opts-grid-big" id="opts-grid"></div>
+      </div>
+      
+      <div id="intro-area" style="display:none; text-align:center">
+        <div class="msg-title" id="intro-title">ROUND 1</div>
+        <div class="msg-body" id="intro-body">Instructions will appear here soon.</div>
+      </div>
+    </main>
+
+    <aside class="sidebar-stage">
+      <div class="side-card">
+        <div class="timer-giant" id="live-timer">60</div>
+        <div class="timer-ring"><div class="timer-fill" id="live-tfill" style="width: 100%"></div></div>
+      </div>
+
+      <div class="side-card active-team-stage">
+        <div class="text-xs text-muted font-title">PRIMARY CAMERA (ACTIVE TEAM)</div>
+        <div class="active-team-name" id="live-active-team">TEAM ALPHA</div>
+        <div class="camera-box" id="live-cam-wrap">
+          <img src="" id="live-cam" style="width:100%; height:100%; object-fit:cover; display:none">
+          <div id="cam-placeholder" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:var(--muted)">
+            <span>📷 NO FEED</span>
+          </div>
+          <div class="camera-label">LIVE FEED</div>
+        </div>
+      </div>
+
+      <div class="side-card">
+        <div class="font-title text-xs text-gold mb-2">PROCTORING GRID</div>
+        <div id="cam-grid-live" style="display:grid; grid-template-columns:repeat(3,1fr); gap:5px; max-height:200px; overflow-y:auto"></div>
+      </div>
+
+      <div class="side-card" style="flex:1; overflow-y:auto">
+        <div class="font-title text-xs text-gold mb-3">LEADERBOARD</div>
+        <div id="live-scores"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="msg-overlay" id="msg-overlay">
+    <div class="msg-well">
+      <div class="msg-title" id="overlay-title">QUIZ FINISHED</div>
+      <div class="msg-body" id="overlay-body">Thank you for participating!</div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/storage.js"></script>
+  <script>
+    const socket = io();
+    let quiz = {};
+    let teams = [];
+    let rounds = [];
+    let questions = [];
+    let camStatus = {};
+
+    // Initial load
+    onUpdate((data) => {
+      quiz = Store.getQuiz();
+      teams = Store.getActiveTeams();
+      rounds = Store.getRounds();
+      questions = Store.getQuestions();
+      renderAll();
+      updateTargetList();
+    });
+
+
+    setInterval(() => {
+      if(quiz.status === 'running' || quiz.status === 'participant_turn'){
+        updateTimer();
+      }
+      // Refresh camera feed if available
+      updateCamera();
+    }, 1000);
+
+    function renderAll(){
+      const s = quiz.status;
+      const r = rounds[quiz.currentRoundIdx];
+      
+      // Header
+      document.getElementById('live-stage').textContent = r?.stage || 'IDLE';
+      document.getElementById('live-round').textContent = `ROUND ${quiz.currentRoundIdx + 1}`;
+      
+      // Overlays
+      const overlay = document.getElementById('msg-overlay');
+      if(s === 'idle' || s === 'finished'){
+        overlay.style.display = 'flex';
+        document.getElementById('overlay-title').textContent = s === 'idle' ? 'GET READY!' : 'QUIZ FINISHED';
+        document.getElementById('overlay-body').textContent = s === 'idle' ? 'The competition will begin shortly.' : 'Tournament complete.';
+      } else {
+        overlay.style.display = 'none';
+      }
+
+      // Main Area
+      const qArea = document.getElementById('q-area');
+      const introArea = document.getElementById('intro-area');
+      
+      if(s === 'round_intro'){
+        qArea.style.display = 'none';
+        introArea.style.display = 'block';
+        document.getElementById('intro-title').textContent = r?.name || 'ROUND START';
+        document.getElementById('intro-body').textContent = r?.instructions || '';
+      } else {
+        qArea.style.display = 'flex';
+        introArea.style.display = 'none';
+        
+        const q = questions[quiz.globalQIdx];
+        if(q){
+          document.getElementById('q-text').textContent = q.text;
+          document.getElementById('opts-grid').innerHTML = q.options.map((o, i) => `
+            <div class="opt-big ${quiz.status === 'round_end' && q.correct.includes(i) ? 'correct' : ''}">
+              <span class="opt-letter">${String.fromCharCode(65+i)}</span>
+              <span>${o}</span>
+            </div>
+          `).join('');
+        }
+      }
+
+      // Active Team
+      const activeTeam = s === 'participant_turn' ? { name: '📢 PARTICIPANTS' } : teams[quiz.currentTeamIdx];
+      document.getElementById('live-active-team').textContent = activeTeam?.name || '—';
+
+      // Leaderboard
+      const sorted = [...teams].sort((a,b) => (b.score||0)-(a.score||0));
+      document.getElementById('live-scores').innerHTML = sorted.map((t, i) => `
+        <div class="sb-row-big">
+          <span class="sb-rank-big">${i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${i+1}`}</span>
+          <span class="sb-name-big">${t.name}</span>
+          <span class="sb-pts-big">${t.score || 0}</span>
+        </div>
+      `).join('');
+    }
+
+    function updateTimer(){
+      let rem = 0, limit = 60;
+      if(quiz.status === 'participant_turn'){
+        rem = Math.max(0, quiz.participantTimeLimit - Math.floor((Date.now() - quiz.participantTimerStart)/1000));
+        limit = quiz.participantTimeLimit;
+      } else {
+        rem = Math.max(0, quiz.timerLimit - Math.floor((Date.now() - quiz.timerStart)/1000));
+        limit = quiz.timerLimit;
+      }
+      
+      document.getElementById('live-timer').textContent = rem;
+      document.getElementById('live-tfill').style.width = (rem/limit * 100) + '%';
+      
+      if(rem <= 5) document.getElementById('live-timer').style.color = 'var(--red)';
+      else document.getElementById('live-timer').style.color = 'var(--gold)';
+    }
+
+    function updateCamera(){
+      // 1. Primary Camera (Active Team)
+      const activeTeam = teams[quiz.currentTeamIdx];
+      const primaryEl = document.getElementById('live-cam');
+      const placeholderEl = document.getElementById('cam-placeholder');
+      
+      if(activeTeam && quiz.status !== 'participant_turn'){
+        const frame = Store.getCamFrame(activeTeam.id);
+        if(frame){
+          primaryEl.src = frame;
+          primaryEl.style.display = 'block';
+          placeholderEl.style.display = 'none';
+        } else {
+          primaryEl.style.display = 'none';
+          placeholderEl.style.display = 'flex';
+        }
+      } else {
+        primaryEl.style.display = 'none';
+        placeholderEl.style.display = 'flex';
+      }
+
+      // 2. Proctoring Grid (All active teams/participants)
+      const gridEl = document.getElementById('cam-grid-live');
+      if(gridEl){
+        const allMonitored = Store.getMonitoredUsers();
+        gridEl.innerHTML = allMonitored.map(u => {
+          const frame = Store.getCamFrame(u.id);
+          const isActive = u.id===(activeTeam?.id);
+          return `<div style="aspect-ratio:4/3; background:black; border-radius:4px; overflow:hidden; position:relative; border:1px solid ${isActive?'var(--gold)':'var(--border)'}">
+            ${frame ? `<img src="${frame}" style="width:100%; height:100%; object-fit:cover">` : '<div style="height:100%; display:flex; align-items:center; justify-content:center; font-size:8px; color:#444">OFF</div>'}
+            <div style="position:absolute; bottom:2px; left:2px; font-size:6px; background:rgba(0,0,0,0.6); padding:1px 3px; border-radius:2px">${u.ident}</div>
+            <div class="cam-btns" style="position:absolute; top:2px; right:2px; display:flex; flex-direction:column; gap:2px">
+               <button onclick="liveAction('warn','${u.id}', event)" style="background:#ef4444; border:none; color:white; font-size:6px; padding:2px; border-radius:2px; cursor:pointer" title="Warn">⚠️</button>
+               <button onclick="liveAction('msg','${u.id}', event)" style="background:#06b6d4; border:none; color:black; font-size:6px; padding:2px; border-radius:2px; cursor:pointer" title="Message">💬</button>
+               ${u.monitorType==='TEAM' ? `<button onclick="liveAction('hold','${u.id}', event)" style="background:#eab308; border:none; color:black; font-size:6px; padding:2px; border-radius:2px; cursor:pointer" title="Hold">🛑</button>`:''}
+            </div>
+          </div>`;
+        }).join('');
+      }
+    }
+
+    // Message Listener for Remote Control
+    window.addEventListener('message', (e) => {
+      const { cmd, data } = e.data;
+      if(cmd === 'SHOW_TEAM_CAM'){
+        // Logic to force show a specific team's camera if needed
+        // For now we just auto-sync with active team
+      }
+      if(cmd === 'MSG'){
+        toast(data);
+      }
+    });
+
+    function toast(txt){
+       const t = document.createElement('div');
+       t.style = "position:fixed; bottom:40px; left:50%; transform:translateX(-50%); background:var(--gold); color:black; padding:12px 30px; border-radius:100px; font-weight:800; font-size:24px; z-index:1000; box-shadow:0 10px 30px rgba(0,0,0,0.5)";
+       t.textContent = txt;
+       document.body.appendChild(t);
+       setTimeout(() => t.remove(), 4000);
+    }
+
+    // ─── MIC BROADCAST (PTT) ─────────────────────────────────────
+    let mediaRecorder = null;
+    let audioChunks = [];
+
+    async function startMicBroadcast(){
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+        
+        mediaRecorder.ondataavailable = e => { if(e.data.size > 0) audioChunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(audioChunks, { type: 'audio/webm' });
+          const target = document.getElementById('live-cmd-target').value || 'all';
+          const reader = new FileReader();
+          reader.onload = () => {
+            socket.emit('admin_audio', { audio: reader.result, target });
+          };
+          reader.readAsDataURL(blob);
+          stream.getTracks().forEach(t => t.stop());
+        };
+        
+        mediaRecorder.start();
+        document.getElementById('btn-live-mic').style.boxShadow = '0 0 15px var(--red)';
+        document.getElementById('btn-live-mic').style.transform = 'scale(1.2)';
+      } catch(e) {
+        alert('Mic error: ' + e.message);
+      }
+    }
+
+    function stopMicBroadcast(){
+      if(mediaRecorder && mediaRecorder.state !== 'inactive'){
+        mediaRecorder.stop();
+        document.getElementById('btn-live-mic').style.boxShadow = 'none';
+        document.getElementById('btn-live-mic').style.transform = 'scale(1)';
+      }
+    }
+
+    function updateTargetList(){
+      const sel = document.getElementById('live-cmd-target');
+      if(!sel) return;
+      const cur = sel.value;
+      sel.innerHTML = '<option value="all">ALL TEAMS</option>' + 
+        teams.filter(t => t.status==='active').map(t => `<option value="${t.id}" ${t.id===cur?'selected':''}>T${t.teamNumber}: ${t.name}</option>`).join('');
+    }
+
+    socket.on('admin_cmd', (data) => {
+      if(data.type === 'msg' || data.type === 'warn'){
+        toast(data.msg || (data.type==='warn'?'Official Warning Sent':''));
+      }
+    });
+
+    function liveAction(type, teamId, event){
+      if(event) event.stopPropagation();
+      const t = teams.find(x => x.id === teamId);
+      if(!t) return;
+      
+      let msg = "";
+      if(type === 'warn') msg = prompt(`Send WARNING to ${t.name}:`, "Suspicious activity detected! Please focus on the quiz.");
+      if(type === 'msg') msg = prompt(`Send MESSAGE to ${t.name}:`);
+      
+      if(type === 'hold'){
+        const isHeld = !!(quiz.holdStatus && quiz.holdStatus[teamId]);
+        socket.emit('admin_cmd', { type: 'hold', target: teamId, status: !isHeld });
+        toast(`${t.name} ${!isHeld ? 'HELD' : 'RELEASED'}`);
+        return;
+      }
+      
+      if(!msg) return;
+      socket.emit('admin_cmd', { type, target: teamId, msg });
+      toast(`${type.toUpperCase()} sent to ${t.name}`);
+    }
+
+  </script>
+</body>
+</html>

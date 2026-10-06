@@ -1,0 +1,30 @@
+{
+  "name": "quiz-app",
+  "version": "1.0.0",
+  "description": "Quiz Competition Application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "vite",
+    "dev:all": "concurrently -n NODE,PYTHON -c cyan,yellow \"node server.js\" \"cd python_backend && python app.py\"",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^10.0.5",
+    "vite": "^8.0.8"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "lucide-react": "^1.8.0",
+    "mongoose": "^9.4.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-router-dom": "^7.14.1",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3"
+  }
+}

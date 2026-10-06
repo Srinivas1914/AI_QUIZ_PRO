@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PROCTORING MONITOR — Quiz Central</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    :root { --p-bg: #050507; --p-card: rgba(255,255,255,0.03); --p-border: rgba(255,255,255,0.08); }
+    body { background: var(--p-bg); color: white; margin: 0; font-family: 'Plus+Jakarta+Sans', sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+    
+    .mon-header { height: 60px; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 1px solid var(--p-border); backdrop-filter: blur(10px); }
+    .mon-logo { font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: 20px; color: var(--gold); letter-spacing: 2px; }
+    
+    .mon-layout { display: grid; grid-template-columns: 1fr 340px; gap: 0; flex: 1; overflow: hidden; }
+    
+    /* CAM GRID */
+    .cam-section { padding: 20px; overflow-y: auto; background: radial-gradient(circle at center, #111 0%, #050507 100%); }
+    .cam-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 15px; }
+    
+    .cam-card { background: #000; border: 1px solid var(--p-border); border-radius: 12px; overflow: hidden; position: relative; aspect-ratio: 4/3; transition: 0.2s; }
+    .cam-card:hover { border-color: var(--cyan); box-shadow: 0 0 15px rgba(6, 182, 212, 0.2); }
+    .cam-card.active-turn { border-color: var(--gold); border-width: 2px; }
+    .cam-card.suspicious { border-color: var(--red); animation: pulse-red 1s infinite; }
+    
+    @keyframes pulse-red { 0% { box-shadow: 0 0 0px rgba(239, 68, 68, 0); } 50% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); } 100% { box-shadow: 0 0 0px rgba(239, 68, 68, 0); } }
+    
+    .cam-img { width: 100%; height: 100%; object-fit: cover; }
+    .cam-overlay { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(0,0,0,0.7) 0%, transparent 40%); pointer-events: none; }
+    .cam-info { position: absolute; bottom: 8px; left: 10px; right: 10px; display: flex; justify-content: space-between; align-items: center; z-index: 2; }
+    .cam-name { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .cam-status { font-size: 8px; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.5); }
+    
+    .cam-actions { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 4px; opacity: 0; transition: 0.2s; z-index: 5; }
+    .cam-card:hover .cam-actions { opacity: 1; }
+    .act-btn { width: 28px; height: 28px; border-radius: 6px; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+    .btn-warn { background: #ef4444; color: white; }
+    .btn-msg { background: #06b6d4; color: black; }
+    .btn-hold { background: #eab308; color: black; }
+    
+    /* SIDEBAR */
+    .mon-side { border-left: 1px solid var(--p-border); display: flex; flex-direction: column; background: #08080a; }
+    .side-tabs { display: flex; border-bottom: 1px solid var(--p-border); }
+    .stab { flex: 1; padding: 15px; text-align: center; font-size: 11px; font-weight: 700; color: var(--muted); cursor: pointer; transition: 0.2s; }
+    .stab.active { color: var(--gold); border-bottom: 2px solid var(--gold); background: rgba(255,215,0,0.05); }
+    
+    .side-pane { flex: 1; overflow-y: auto; padding: 15px; display: none; }
+    .side-pane.active { display: block; }
+    
+    .log-row { padding: 10px; border-bottom: 1px solid var(--p-border); font-size: 12px; }
+    .log-time { color: var(--muted); font-family: var(--font-t); font-size: 10px; margin-bottom: 3px; }
+    .log-tag { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 3px; margin-right: 5px; }
+    
+    .alert-card { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+    
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--p-border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+    
+    .empty { text-align: center; padding: 40px; color: var(--muted); font-size: 13px; }
+    
+    .stats-bar { padding: 15px 20px; background: rgba(0,0,0,0.5); display: flex; gap: 20px; font-size: 11px; border-top: 1px solid var(--p-border); }
+    .stat { display: flex; align-items: center; gap: 6px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot-green { background: #22c55e; box-shadow: 0 0 5px #22c55e; }
+    .dot-red { background: #ef4444; }
+  </style>
+</head>
+<body>
+  <header class="mon-header">
+    <div class="mon-logo">PROCTORING MONITOR</div>
+    <div style="display:flex; flex:1; justify-content:center; max-width:400px; margin:0 20px">
+      <input type="text" id="mon-search" placeholder="Search team or participant..." style="width:100%; background:rgba(255,255,255,0.05); border:1px solid var(--p-border); border-radius:100px; padding:8px 20px; color:white; font-size:12px" oninput="renderAll()">
+    </div>
+    <div style="display:flex; gap:10px; align-items:center">
+      <select id="mon-view-mode" class="btn-sm" style="background:#222; color:white; border:1px solid #444" onchange="renderAll()">
+        <option value="grid">GRID VIEW</option>
+        <option value="focus">STAGE FOCUS</option>
+      </select>
+      <div id="quiz-id-badge" class="badge badge-purple" style="font-size:11px; letter-spacing:1px">QUIZ: GLOBAL</div>
+      <button class="btn-sm btn-gold" onclick="window.location.reload()">🔄 REFRESH</button>
+      <button class="btn-sm btn-red" onclick="window.close()">✕ CLOSE</button>
+    </div>
+  </header>
+
+  <div class="mon-layout">
+    <section class="cam-section">
+      <div class="cam-grid" id="cam-grid">
+        <!-- Feeds injected here -->
+      </div>
+    </section>
+
+    <aside class="mon-side">
+      <div class="side-tabs">
+        <div class="stab active" id="stab-alerts" onclick="switchPane('alerts')">⚠ ALERTS</div>
+        <div class="stab" id="stab-activity" onclick="switchPane('activity')">📜 LOG</div>
+        <div class="stab" id="stab-settings" onclick="switchPane('settings')">⚙️ DASH</div>
+      </div>
+
+      <div id="pane-alerts" class="side-pane active">
+        <div id="mon-alerts"></div>
+      </div>
+
+      <div id="pane-activity" class="side-pane">
+        <div id="mon-activity"></div>
+      </div>
+
+      <div id="pane-settings" class="side-pane">
+        <div class="card mb-2" style="background:#000">
+           <div class="card-head"><span class="card-title">QUIZ CONTROL</span></div>
+           <div style="padding:15px">
+              <div class="text-xs text-muted mb-2">Manage current session status</div>
+              <button class="btn-main btn-gold mb-2" style="font-size:11px" onclick="monGlobalAction('pause')">⏯ PAUSE QUIZ</button>
+              <button class="btn-main btn-red" style="font-size:11px" onclick="monGlobalAction('alert_all')">🚨 ALERT ALL</button>
+           </div>
+        </div>
+        <div class="empty">Advanced settings are managed from the main dashboard.</div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat"><span class="dot dot-green"></span> ACTIVE TEAMS: <strong id="stat-teams">0</strong></div>
+    <div class="stat"><span class="dot dot-green" style="background:#06b6d4"></span> PARTICIPANTS: <strong id="stat-parts">0</strong></div>
+    <div class="stat"><span class="dot dot-red"></span> SUSPICIOUS: <strong id="stat-susp">0</strong></div>
+    <div id="mon-sync-status" class="text-muted" style="margin-left:auto; font-size:10px">SYNCED: JUST NOW</div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/storage.js"></script>
+  <script>
+    const socket = io();
+    let quiz = {};
+    let teams = [];
+    let participants = [];
+    let camStatus = {};
+    let alerts = [];
+    let searchTimer = null;
+
+    onUpdate(() => {
+      quiz = Store.getQuiz();
+      teams = Store.getActiveTeams();
+      participants = Store.getParticipants();
+      camStatus = Store.getCamStatus();
+      alerts = Store.getAlerts();
+      
+      const sess = Store.getSession();
+      if(sess?.quizId) document.getElementById('quiz-id-badge').textContent = `QUIZ: ${sess.quizId}`;
+      document.getElementById('mon-sync-status').textContent = `SYNCED: ${new Date().toLocaleTimeString()}`;
+
+      renderAll();
+    });
+
+    setInterval(renderAll, 3000); 
+
+    function renderAll(){
+      const sess = Store.getSession();
+      const grid = document.getElementById('cam-grid');
+      const activeTeam = teams[quiz.currentTeamIdx];
+      const search = document.getElementById('mon-search').value.toLowerCase();
+      // Search filter
+      const allMonitored = Store.getMonitoredUsers();
+      const streamable = allMonitored.filter(u => {
+        if(search && !u.name.toLowerCase().includes(search) && !u.ident.toLowerCase().includes(search)) return false;
+        
+        const status = camStatus[u.id];
+        // If they have a status within last 2 minutes, show them
+        return status && (Date.now() - status.lastSeen < 120000); 
+      });
+
+      // Sort: Active team first, then suspicious, then alphabetical
+      streamable.sort((a,b) => {
+        const as = camStatus[a.id]?.suspicious ? 1 : 0;
+        const bs = camStatus[b.id]?.suspicious ? 1 : 0;
+        if(a.id === activeTeam?.id) return -1;
+        if(b.id === activeTeam?.id) return 1;
+        if(bs !== as) return bs - as;
+        return a.name.localeCompare(b.name);
+      });
+
+      if(!streamable.length){
+        grid.innerHTML = `<div class="empty" style="grid-column: 1/-1">
+          <div style="font-size:40px; margin-bottom:15px">📡</div>
+          No active camera feeds detected.<br>
+          <span style="font-size:11px; opacity:0.6">Ensure participants are logged in and camera permission is granted.</span>
+        </div>`;
+      } else {
+        grid.style.gridTemplateColumns = viewMode === 'focus' ? 'repeat(auto-fill, minmax(300px, 1fr))' : 'repeat(auto-fill, minmax(200px, 1fr))';
+        
+        grid.innerHTML = streamable.map(u => {
+          const frame = Store.getCamFrame(u.id);
+          const status = camStatus[u.id] || {};
+          const isSusp = status.suspicious || status.tabHidden;
+          const isActive = u.type==='TEAM' && u.id === activeTeam?.id;
+          
+          return `
+            <div class="cam-card ${isSusp?'suspicious':''} ${isActive?'active-turn':''}" style="${isActive ? 'border-color:var(--gold); box-shadow:0 0 20px rgba(255,215,0,0.3)' : ''}">
+              ${isActive ? `<div style="position:absolute; top:0; left:50%; transform:translateX(-50%); background:var(--gold); color:black; font-size:7px; font-weight:900; padding:2px 8px; border-radius:0 0 6px 6px; z-index:10">CURRENT TURN</div>` : ''}
+              ${frame ? `<img src="${frame}" class="cam-img">` : `<div style="height:100%; display:flex; align-items:center; justify-content:center; color:#333; font-size:10px; background:#111">RECONNECTING...</div>`}
+              <div class="cam-overlay"></div>
+              <div class="cam-info">
+                <div class="cam-name"><span class="badge ${u.type==='TEAM'?'badge-gold':'badge-cyan'}" style="margin-right:5px; padding:1px 3px; font-size:8px">${u.ident}</span> ${u.name}</div>
+                <div class="cam-status" style="color:${isSusp?'#ff4d4d':'#22c55e'}">${status.tabHidden?'TAB HIDDEN':isSusp?'SUSPICIOUS':'ONLINE'}</div>
+              </div>
+              <div class="cam-actions">
+                <button class="act-btn btn-warn" onclick="monAction('warn','${u.id}','${u.name}')" title="Send Official Warning">⚠</button>
+                <button class="act-btn btn-msg" onclick="monAction('msg','${u.id}','${u.name}')" title="Message User">💬</button>
+                ${u.type==='TEAM'?`<button class="act-btn btn-hold" onclick="monAction('hold','${u.id}','${u.name}')" title="${quiz.holdStatus?.[u.id]?'Release Turn':'Hold Turn'}">${quiz.holdStatus?.[u.id]?'▶':'🛑'}</button>`:''}
+              </div>
+            </div>`;
+        }).join('');
+      }
+
+      // Stats
+      document.getElementById('stat-teams').textContent = myTeams.length;
+      document.getElementById('stat-parts').textContent = myParts.length;
+      document.getElementById('stat-susp').textContent = streamable.filter(u => camStatus[u.id]?.suspicious).length;
+
+      renderAlerts();
+      renderActivity();
+    }
+
+    function renderAlerts(){
+      const el = document.getElementById('mon-alerts');
+      const activeAlerts = alerts.filter(a => !a.dismissed).slice(0, 10).reverse();
+      if(!activeAlerts.length){ el.innerHTML = '<div class="empty">No active security alerts.</div>'; return; }
+      
+      el.innerHTML = activeAlerts.map(a => {
+        const u = [...teams, ...participants].find(x => x.id === a.teamId);
+        return `
+          <div class="alert-card">
+            <div style="display:flex; justify-content:space-between; align-items:start">
+              <span class="badge badge-red" style="font-size:8px">${a.type.toUpperCase()}</span>
+              <span class="log-time">${a.time}</span>
+            </div>
+            <div style="font-weight:700; font-size:12px; margin-top:5px">${u?.name || 'Unknown'}</div>
+            <div style="font-size:11px; opacity:0.8; margin-top:3px">${a.msg}</div>
+            <div style="margin-top:10px; display:flex; gap:5px">
+               <button class="btn-xs btn-red" onclick="monAction('warn','${a.teamId}','${u?.name}')">WARN</button>
+               <button class="btn-xs" style="background:rgba(255,255,255,0.1); border:none; color:white" onclick="dismissAlert('${a.time}')">DISMISS</button>
+            </div>
+          </div>`;
+      }).join('');
+    }
+
+    function renderActivity(){
+      const el = document.getElementById('mon-activity');
+      const act = Store.getActivity().slice(0, 30);
+      if(!act.length) return;
+      el.innerHTML = act.map(a => `
+        <div class="log-row">
+          <div class="log-time">${a.time}</div>
+          <div style="color:${a.type==='error'?'#ff4d4d':a.type==='success'?'#22c55e':'white'}">${a.text}</div>
+        </div>`).join('');
+    }
+
+    function switchPane(id){
+      document.querySelectorAll('.stab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.side-pane').forEach(p => p.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById('pane-'+id).classList.add('active');
+    }
+
+    function monAction(type, id, name){
+      let msg = "";
+      if(type === 'warn') msg = prompt(`Send SECURITY WARNING to ${name}:`, "Suspicious activity detected! Please keep your attention on the screen.");
+      if(type === 'msg') msg = prompt(`Send Message to ${name}:`);
+      
+      if(type === 'hold'){
+        const isHeld = !!(quiz.holdStatus && quiz.holdStatus[id]);
+        socket.emit('admin_cmd', { type: 'hold', target: id, status: !isHeld });
+        return;
+      }
+      
+      if(!msg) return;
+      socket.emit('admin_cmd', { type, target: id, msg });
+    }
+    
+    function dismissAlert(time){
+      const all = Store.getAlerts();
+      const updated = all.map(a => a.time === time ? { ...a, dismissed: true } : a);
+      Store.saveAlerts(updated);
+      renderAll();
+    }
+
+    function monGlobalAction(type){
+       if(type === 'pause'){
+          const nextStatus = quiz.status === 'paused' ? 'running' : 'paused';
+          socket.emit('admin_cmd', { type: 'quiz_status', status: nextStatus });
+          toast(`QUIZ ${nextStatus.toUpperCase()}`);
+       }
+       if(type === 'alert_all'){
+          const msg = prompt("SEND URGENT ALERT TO ALL CONTESTANTS:", "Attention! Please maintain quiz integrity. Any suspicious activity will lead to disqualification.");
+          if(msg) socket.emit('admin_cmd', { type: 'msg', target: 'all', msg });
+       }
+    }
+
+    function toast(msg){
+       const t = document.createElement('div');
+       t.style = "position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:var(--gold); color:black; padding:10px 25px; border-radius:100px; font-weight:800; font-size:12px; z-index:9999; box-shadow:0 10px 30px rgba(0,0,0,0.5)";
+       t.textContent = msg;
+       document.body.appendChild(t);
+       setTimeout(() => { t.style.opacity = '0'; t.style.transition = '0.5s'; setTimeout(()=>t.remove(), 500); }, 2500);
+    }
+  </script>
+</body>
+</html>

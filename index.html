@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quiz Competition</title>
+<link rel="stylesheet" href="/css/style.css">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body class="login-page">
+<div id="toast-container"></div>
+
+<div class="login-wrap">
+  <div class="login-header">
+    <div class="logo-hex"><span>⚡</span></div>
+    <div class="college-name">Quiz PORTAL</div>
+    <div class="event-title">CAMPUS INTELLIQUIZ</div>
+    <div class="year-chip">2026</div>
+  </div>
+
+  <div class="login-tabs">
+    <button class="ltab active" id="ltab-login" onclick="showLoginTab('login')">LOGIN</button>
+    <button class="ltab" id="ltab-register" onclick="showLoginTab('register')">REGISTER</button>
+  </div>
+
+  <!-- LOGIN -->
+  <div id="panel-login" class="lpanel active">
+    <div class="lcard">
+      <div class="lcard-title">SIGN IN</div>
+      <div class="form-group">
+        <label>USERNAME</label>
+        <input type="text" id="l-username" placeholder="Enter your username" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label>PASSWORD</label>
+        <input type="password" id="l-password" placeholder="Enter your password" autocomplete="current-password">
+      </div>
+      <div class="form-group">
+        <label>QUIZ ID (FOR TEAMS & PRIVATE SESSIONS)</label>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="l-quizid" placeholder="e.g. ABC123" style="text-transform:uppercase; flex:1">
+          <button class="btn-sm btn-cyan" onclick="validateQuizId()" style="width:auto; padding:0 15px">VERIFY</button>
+        </div>
+        <div id="l-quiz-info" class="text-xs mt-1" style="display:none"></div>
+      </div>
+      <div id="l-error" class="err-msg"></div>
+      <button class="btn-main" onclick="doLogin()">LOGIN →</button>
+      
+
+
+    </div>
+  </div>
+
+  <!-- REGISTER -->
+  <div id="panel-register" class="lpanel">
+    <div class="lcard">
+      <div class="lcard-title">CREATE ACCOUNT</div>
+      <p class="lhint">Register to join the competition. Admin will approve your role.</p>
+      <div class="frow">
+        <div class="form-group"><label>FULL NAME</label><input type="text" id="r-name" placeholder="Your full name"></div>
+        <div class="form-group"><label>ROLL NUMBER</label><input type="text" id="r-roll" placeholder="Roll number"></div>
+      </div>
+      <div class="form-group"><label>USERNAME</label><input type="text" id="r-user" placeholder="Choose a username (min 3 chars)"></div>
+      <div class="frow">
+        <div class="form-group"><label>COLLEGE / INSTITUTION</label><input type="text" id="r-college" placeholder="College name"></div>
+        <div class="form-group"><label>DEPARTMENT</label><input type="text" id="r-dept" placeholder="e.g. Mechanical"></div>
+      </div>
+      <div class="frow">
+        <div class="form-group">
+          <label>YEAR</label>
+          <select id="r-year">
+            <option value="1">1st Year</option>
+            <option value="2">2nd Year</option>
+            <option value="3">3rd Year</option>
+            <option value="4">4th Year</option>
+            <option value="0">N/A (Faculty/Staff)</option>
+          </select>
+        </div>
+        <div class="form-group"><label>QUIZ ID (Optional)</label><input type="text" id="r-quizid" placeholder="Enter Quiz ID if known" style="text-transform:uppercase"></div>
+      </div>
+
+      <div class="frow">
+        <div class="form-group"><label>PASSWORD</label><input type="password" id="r-pass" placeholder="Password (min 4 chars)"></div>
+        <div class="form-group"><label>CONFIRM PASSWORD</label><input type="password" id="r-confirm" placeholder="Confirm password"></div>
+      </div>
+      <div id="r-error" class="err-msg"></div>
+      <div id="r-success" class="suc-msg hidden"></div>
+      <button class="btn-main btn-green" onclick="doRegister()">CREATE ACCOUNT</button>
+    </div>
+  </div>
+
+  <!-- CAMERA PERMISSION MODAL -->
+  <div class="modal-bg" id="modal-camera">
+    <div class="modal" style="max-width:440px;text-align:center">
+      <div class="logo-hex" style="margin-bottom:20px;width:70px;height:70px;font-size:32px">📷</div>
+      <h2 class="font-title text-red mb-2" style="letter-spacing:2px">ACCESS REQUIRED</h2>
+      <p class="text-sm text-muted mb-4" style="line-height:1.6">Proctoring failed. Camera and Microphone access are <strong>mandatory</strong> to participate in this competition. Please grant permission from your browser's system prompt.</p>
+      
+      <div id="cam-box-error" style="display:none;border-color:var(--red);background:rgba(255,0,0,0.05);border:1px solid;padding:12px;border-radius:8px;margin-bottom:20px">
+        <div id="cam-err-msg" class="text-sm font-title text-red" style="margin-bottom:8px">ACCESS DENIED</div>
+        <div class="text-xs text-muted" style="text-align:left;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px">
+          <strong>HOW TO FIX:</strong><br>
+          1. Click the <strong>Camera/Lock icon</strong> in your address bar.<br>
+          2. Change "Blocked" to "Allowed".<br>
+          3. Use <strong>HTTPS</strong> for remote/mobile access.<br><br>
+          <div style="background:rgba(255,215,0,0.1);padding:8px;border-radius:4px;color:var(--gold);border:1px solid var(--gold)">
+            <strong>🔌 MOBILE / SAME WI-FI FIX:</strong><br>
+            If using a local IP (e.g., 192.168.1.X) on your phone:<br>
+            1. Open Chrome on Phone.<br>
+            2. Go to: <strong>chrome://flags</strong><br>
+            3. Search for: <strong>Insecure origins treated as secure</strong><br>
+            4. Add your Server IP (e.g., <code>http://192.168.1.5:8080</code>) and set to <strong>Enabled</strong>.<br>
+            5. Relaunch Chrome. This allows Camera/Mic to work over Wi-Fi.
+          </div>
+        </div>
+      </div>
+      
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn-main font-title" id="btn-cam-retry" onclick="requestCamPermission()" style="letter-spacing:2px">
+          ENABLE CAMERA & LOGIN →
+        </button>
+        <button class="btn-sm" onclick="closeModal('modal-camera')" style="border:none;background:transparent;color:var(--muted)">CANCEL</button>
+      </div>
+
+      <div class="mt-4 text-xs text-muted" style="border-top:1px solid var(--border);padding-top:12px">
+        🔒 Your privacy matters. Feed is active only during the live competition.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/storage.js"></script>
+<script src="/js/login.js"></script>
+</body>
+</html>

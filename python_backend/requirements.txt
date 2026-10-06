@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+motor
+razorpay
+python-jose[cryptography]
+requests
+python-dotenv
