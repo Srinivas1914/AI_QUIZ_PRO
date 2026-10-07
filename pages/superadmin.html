@@ -365,46 +365,55 @@
       </div>
       <div class="dash-grid">
         <div class="card" style="border-color:var(--gold)">
-          <div class="card-head" style="background:rgba(255,215,0,0.1)"><span class="card-title" style="color:var(--gold)">SUPERADMIN PAYMENT SETTINGS</span></div>
+          <div class="card-head" style="background:rgba(255,215,0,0.1)"><span class="card-title" style="color:var(--gold)">SUPERADMIN PAYMENT & AI SETTINGS</span></div>
           <div style="padding:14px">
-            <div class="form-group"><label>AMOUNT PER PAYMENT (₹)</label><input type="number" id="pay-set-amount" value="499"></div>
+            <div class="form-group"><label>QUIZ PACKAGE PRICE (₹)</label><input type="number" id="pay-set-amount" value="499"></div>
             <div class="form-group"><label>QUIZZES ALLOWED PER PAYMENT</label><input type="number" id="pay-set-quizzes" value="2"></div>
             <div class="form-group"><label>VALIDITY (DAYS)</label><input type="number" id="pay-set-validity" value="30"></div>
             <div class="form-group"><label>DISCOUNT / COUPON OFF (%)</label><input type="number" id="pay-set-discount" value="0"></div>
             <div class="form-group">
-              <label>PAYMENTS ENABLED</label>
+              <label>QUIZ START PAYMENT REQUIRED</label>
               <select id="pay-set-enabled">
-                <option value="true">YES (Require Payment)</option>
-                <option value="false">NO (Free for all)</option>
+                <option value="true">YES (Require Payment to Start Quiz)</option>
+                <option value="false">NO (Free for all Admins)</option>
               </select>
             </div>
             <div class="form-group">
+              <label>AI GENERATION PAYMENT REQUIRED</label>
+              <select id="pay-set-ai-enabled">
+                <option value="true">YES (Require Payment for AI Questions)</option>
+                <option value="false">NO (Free AI Generation)</option>
+              </select>
+            </div>
+            <div class="form-group"><label>AI FREE GENERATION LIMIT (0 = Always Require Payment)</label><input type="number" id="pay-set-ai-free" value="0"></div>
+            <div class="form-group"><label>AI QUESTION GENERATION PRICE (₹)</label><input type="number" id="pay-set-ai-price" value="10"></div>
+            <div class="form-group">
               <label>GROQ API KEY (AI Generation)</label>
               <input type="password" id="pay-set-groq" placeholder="gsk_...">
-              <div class="text-xs text-muted mt-1">Leave empty to use .env key</div>
+              <div class="text-xs text-muted mt-1">Live AI key for Question Generation</div>
             </div>
-            <button class="btn-main btn-gold mt-2" onclick="savePaymentSettings()">SAVE CONFIGURATION</button>
+            <button class="btn-main btn-gold mt-2" onclick="savePaymentSettings()">💾 SAVE CONFIGURATION</button>
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><span class="card-title">RECENT TRANSACTIONS</span></div>
-          <div class="table-wrap" style="max-height:400px;overflow-y:auto">
+          <div class="card-head"><span class="card-title">RECENT TRANSACTIONS & PLANS</span></div>
+          <div class="table-wrap" style="max-height:450px;overflow-y:auto">
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>DATE</th>
+                  <th>DATE & TIME</th>
                   <th>PAYMENT ID</th>
                   <th>ORDER ID</th>
-                  <th>ADMIN</th>
+                  <th>ADMIN / USER</th>
                   <th>CREDITS (USED/REM)</th>
                   <th>VALIDITY</th>
-                  <th>CODE</th>
                   <th>AMOUNT (₹)</th>
                   <th>STATUS</th>
+                  <th>ACTION</th>
                 </tr>
               </thead>
               <tbody id="payments-body">
-                <tr><td colspan="5" class="text-center p-12 text-muted">Loading payments...</td></tr>
+                <tr><td colspan="9" class="text-center p-12 text-muted">Loading payments...</td></tr>
               </tbody>
             </table>
           </div>
@@ -955,6 +964,106 @@
     </div>
     <div style="padding:10px; border-top:1px solid var(--border); text-align:right">
        <button class="btn-sm" onclick="closeModal('modal-managed-activity')">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<!-- PAYMENT RECEIPT & DETAILS DASHBOARD MODAL -->
+<div class="modal-bg" id="modal-payment-detail">
+  <div class="modal" style="max-width:680px; width:95%; border:1px solid rgba(255,215,0,0.3); box-shadow:0 12px 40px rgba(0,0,0,0.6)">
+    <div class="modal-head" style="background:linear-gradient(90deg, rgba(255,215,0,0.15), transparent); border-bottom:1px solid var(--border)">
+      <div style="display:flex; align-items:center; gap:10px">
+        <span style="font-size:1.3rem">💳</span>
+        <div>
+          <span style="font-weight:700; letter-spacing:1px; color:var(--gold)">PAYMENT & LICENSE DASHBOARD</span>
+          <div class="text-xs text-muted" id="pd-modal-subtitle">Full transaction receipt and subscription quota details</div>
+        </div>
+      </div>
+      <button class="modal-x" onclick="closeModal('modal-payment-detail')">✕</button>
+    </div>
+    
+    <div style="padding:20px; max-height:80vh; overflow-y:auto">
+      <!-- Status Banner -->
+      <div id="pd-status-banner" style="display:flex; justify-content:space-between; align-items:center; padding:12px 18px; border-radius:8px; margin-bottom:18px; background:rgba(0,255,136,0.1); border:1px solid rgba(0,255,136,0.3)">
+        <div>
+          <div class="text-xs text-muted font-mono">STATUS</div>
+          <div style="font-size:1.2rem; font-weight:700; color:var(--green)" id="pd-status-text">PAID</div>
+        </div>
+        <div style="text-align:right">
+          <div class="text-xs text-muted font-mono">AMOUNT PAID</div>
+          <div style="font-size:1.5rem; font-weight:800; color:var(--gold)" id="pd-amount">₹499.00</div>
+        </div>
+      </div>
+
+      <!-- Quick KPI Grid -->
+      <div class="frow mb-3" style="gap:10px">
+        <div class="kpi cyan" style="flex:1">
+          <div class="kpi-val" id="pd-credits-total">2</div>
+          <div class="kpi-lbl">TOTAL QUIZ CREDITS</div>
+        </div>
+        <div class="kpi red" style="flex:1">
+          <div class="kpi-val" id="pd-credits-used">0</div>
+          <div class="kpi-lbl">USED QUIZZES</div>
+        </div>
+        <div class="kpi green" style="flex:1">
+          <div class="kpi-val" id="pd-credits-rem">2</div>
+          <div class="kpi-lbl">REMAINING QUIZZES</div>
+        </div>
+      </div>
+
+      <!-- Detail Cards Grid -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px">
+        <!-- Admin & College Card -->
+        <div class="card" style="margin:0; background:rgba(255,255,255,0.02)">
+          <div class="card-head"><span class="card-title text-cyan">👤 ADMIN INFORMATION</span></div>
+          <div style="padding:12px; font-size:0.85rem">
+            <div class="mb-2"><span class="text-muted">Admin Name:</span> <strong id="pd-admin-name" class="text-white">—</strong></div>
+            <div class="mb-2"><span class="text-muted">Username / Email:</span> <span id="pd-admin-email" class="font-mono text-cyan">—</span></div>
+            <div class="mb-2"><span class="text-muted">College / Inst:</span> <strong id="pd-college" class="text-gold">—</strong></div>
+            <div><span class="text-muted">User ID:</span> <span id="pd-user-id" class="font-mono text-xs text-muted">—</span></div>
+          </div>
+        </div>
+
+        <!-- Transaction Identifiers Card -->
+        <div class="card" style="margin:0; background:rgba(255,255,255,0.02)">
+          <div class="card-head"><span class="card-title text-gold">🧾 TRANSACTION IDENTIFIERS</span></div>
+          <div style="padding:12px; font-size:0.85rem">
+            <div class="mb-2"><span class="text-muted">Payment ID:</span> <div id="pd-payment-id" class="font-mono text-xs text-green" style="word-break:break-all">—</div></div>
+            <div class="mb-2"><span class="text-muted">Razorpay Order ID:</span> <div id="pd-order-id" class="font-mono text-xs text-gold" style="word-break:break-all">—</div></div>
+            <div><span class="text-muted">Payment Date & Time:</span> <div id="pd-date" class="text-xs text-white">—</div></div>
+          </div>
+        </div>
+
+        <!-- Package & Plan Card -->
+        <div class="card" style="margin:0; background:rgba(255,255,255,0.02)">
+          <div class="card-head"><span class="card-title text-purple">📦 PLAN & ACTIVATION</span></div>
+          <div style="padding:12px; font-size:0.85rem">
+            <div class="mb-2"><span class="text-muted">Package:</span> <strong id="pd-package" class="text-white">₹499 Plan</strong></div>
+            <div class="mb-2"><span class="text-muted">Plan Status:</span> <span id="pd-plan-status" class="badge badge-cyan">ACTIVE</span></div>
+            <div><span class="text-muted">Activation Code:</span> 
+              <div style="display:flex; align-items:center; gap:6px; margin-top:4px">
+                <code id="pd-act-code" style="background:rgba(255,215,0,0.1); color:var(--gold); padding:4px 8px; border-radius:4px; font-size:0.95rem; font-weight:700">—</code>
+                <button class="btn-icon" onclick="copyPdCode()" title="Copy Code">📋</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Validity & Timeline Card -->
+        <div class="card" style="margin:0; background:rgba(255,255,255,0.02)">
+          <div class="card-head"><span class="card-title text-green">📅 VALIDITY & TIMELINE</span></div>
+          <div style="padding:12px; font-size:0.85rem">
+            <div class="mb-2"><span class="text-muted">Start Date:</span> <strong id="pd-valid-from" class="text-white">—</strong></div>
+            <div class="mb-2"><span class="text-muted">Expiry Date:</span> <strong id="pd-expires-at" class="text-red">—</strong></div>
+            <div><span class="text-muted">Duration:</span> <span id="pd-validity-days" class="text-white">30 Days</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding:14px 20px; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.2)">
+      <button class="btn-sm btn-cyan" onclick="printPdReceipt()">🖨️ PRINT RECEIPT</button>
+      <button class="btn-sm btn-gold" onclick="closeModal('modal-payment-detail')">CLOSE</button>
     </div>
   </div>
 </div>

@@ -137,7 +137,18 @@ const Store = {
     const list=Store.getUsers(), idx=list.findIndex(u=>u.id===id);
     if(idx>=0){ list[idx]={...list[idx],...patch}; Store.saveUsers(list); }
   },
-  deleteUser(id){ Store.saveUsers(Store.getUsers().filter(u=>u.id!==id)); },
+  deleteUser(id){
+    const list = Store.getUsers().filter(u => u.id !== id);
+    Store.saveUsers(list);
+    try {
+      const token = localStorage.getItem('sq_token');
+      fetch('/api/users/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ id, token })
+      }).catch(e => console.warn('[DELETE] Backend API notify failed:', e));
+    } catch(e) {}
+  },
   addUser(u){ const list=Store.getUsers(); list.push(u); Store.saveUsers(list); },
 
   // Teams — sorted by teamNumber

@@ -153,6 +153,12 @@ async def ai_generate(request: Request, user: dict = Depends(get_current_user)):
     user_id = user.get('userId') or user.get('name') or 'unknown'
     is_super = user.get('isSuper', False)
     
+    # Check payment settings
+    config = await db.payment_settings.find_one({"_id": "payment_config"}) or {}
+    ai_payment_req = config.get("aiPaymentRequired", True)
+    ai_free_limit = int(config.get("aiFreeLimit", 0))
+    ai_price = int(config.get("aiPrice", 10))
+    
     # Check usage in MongoDB
     user_record = await db.ai_usage.find_one({"user_id": user_id})
     if not user_record:
@@ -161,8 +167,13 @@ async def ai_generate(request: Request, user: dict = Depends(get_current_user)):
         
     free_used = user_record.get('free_requests_used', 0)
     
-    if free_used >= FREE_LIMIT and not is_super:
-        return {"requirePayment": True, "limitReached": True, "message": "Free requests limit reached."}
+    if not is_super and ai_payment_req and free_used >= ai_free_limit:
+        return {
+            "requirePayment": True,
+            "limitReached": True,
+            "message": "AI Question Generation requires payment.",
+            "price": ai_price
+        }
         
     # Generate Questions
     questions = generate_groq_questions(topic, count, difficulty)
@@ -175,14 +186,14 @@ async def ai_generate(request: Request, user: dict = Depends(get_current_user)):
         )
         await db.ai_requests.insert_one({
             "user_id": user_id,
-            "type": "free",
+            "type": "free" if free_used < ai_free_limit else "paid",
             "status": "SUCCESS",
             "topic": topic,
             "count": count,
-            "created_at": datetime.now()
+            "created_at": datetime.utcnow()
         })
         
-    return {"success": True, "questions": questions, "freeRequestsRemaining": max(0, FREE_LIMIT - (free_used + 1))}
+    return {"success": True, "questions": questions, "freeRequestsRemaining": max(0, ai_free_limit - (free_used + 1))}
 
 @app.post("/py-api/payment/create_order")
 async def create_payment_order(request: Request, user: dict = Depends(get_current_user)):
@@ -329,8 +340,17 @@ async def get_payment_settings(request: Request, user: dict = Depends(get_curren
             "validityDays": 30,
             "codeValidityDays": 30,
             "discountPercent": 0,
-            "enabled": True
+            "enabled": True,
+            "aiPaymentRequired": True,
+            "aiFreeLimit": 0,
+            "aiPrice": 10,
+            "groqApiKey": ""
         }
+    else:
+        if "_id" in config:
+            config["_id"] = str(config["_id"])
+        if "updatedAt" in config and hasattr(config["updatedAt"], 'isoformat'):
+            config["updatedAt"] = config["updatedAt"].isoformat()
     return {"success": True, "settings": config}
 
 @app.post("/py-api/payment-settings")
@@ -340,14 +360,18 @@ async def update_payment_settings(request: Request, user: dict = Depends(get_cur
     
     data = await request.json()
     new_config = {
-        "amount": data.get("amount", 499),
-        "quizzesPerPayment": data.get("quizzesPerPayment", 2),
-        "validityDays": data.get("validityDays", 30),
-        "codeValidityDays": data.get("codeValidityDays", 30),
-        "discountPercent": data.get("discountPercent", 0),
-        "enabled": data.get("enabled", True),
+        "amount": int(data.get("amount", 499)),
+        "quizzesPerPayment": int(data.get("quizzesPerPayment", 2)),
+        "validityDays": int(data.get("validityDays", 30)),
+        "codeValidityDays": int(data.get("codeValidityDays", 30)),
+        "discountPercent": int(data.get("discountPercent", 0)),
+        "enabled": bool(data.get("enabled", True)),
+        "aiPaymentRequired": bool(data.get("aiPaymentRequired", True)),
+        "aiFreeLimit": int(data.get("aiFreeLimit", 0)),
+        "aiPrice": int(data.get("aiPrice", 10)),
+        "groqApiKey": str(data.get("groqApiKey", "")).strip(),
         "updatedBy": user.get('name', 'superadmin'),
-        "updatedAt": datetime.utcnow()
+        "updatedAt": datetime.utcnow().isoformat()
     }
     
     await db.payment_settings.update_one(
@@ -355,6 +379,24 @@ async def update_payment_settings(request: Request, user: dict = Depends(get_cur
         {"$set": new_config},
         upsert=True
     )
+
+    # If Groq API Key was provided, also save to python_backend/.env and root .env
+    if new_config["groqApiKey"]:
+        try:
+            import re
+            env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+            if os.path.exists(env_path):
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                if "GROQ_API_KEY=" in content:
+                    content = re.sub(r'GROQ_API_KEY=.*', f'GROQ_API_KEY={new_config["groqApiKey"]}', content)
+                else:
+                    content += f'\nGROQ_API_KEY={new_config["groqApiKey"]}\n'
+                with open(env_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+        except Exception as e:
+            print(f"[ENV Update Error] {e}")
+
     return {"success": True, "settings": new_config}
 
 @app.post("/py-api/quiz-start/create_order")
@@ -609,6 +651,19 @@ async def get_payments(request: Request, user: dict = Depends(get_current_user))
     
     cursor = db.payments.find(query).sort("created_at", -1).limit(100)
     payments = await cursor.to_list(length=100)
+
+    # Load users map for enriching admin information
+    users_doc = await db.storages.find_one({"key": "sq_users"})
+    user_map = {}
+    if users_doc and users_doc.get("val"):
+        try:
+            u_list = json.loads(users_doc["val"])
+            for u in u_list:
+                if u.get("id"): user_map[u["id"]] = u
+                if u.get("username"): user_map[u["username"]] = u
+                if u.get("name"): user_map[u["name"]] = u
+        except Exception:
+            pass
     
     for p in payments:
         if "_id" in p: p["_id"] = str(p["_id"])
@@ -618,19 +673,32 @@ async def get_payments(request: Request, user: dict = Depends(get_current_user))
             p["paid_at"] = p["paid_at"].isoformat()
         if "failed_at" in p and hasattr(p["failed_at"], 'isoformat'):
             p["failed_at"] = p["failed_at"].isoformat()
+
+        uid = p.get("user_id") or p.get("adminId")
+        uinfo = user_map.get(uid, {})
+        p["adminName"] = uinfo.get("name") or uid or "Admin"
+        p["adminEmail"] = uinfo.get("email") or uinfo.get("username") or "-"
+        p["college"] = uinfo.get("college") or "-"
+        p["package"] = f"₹{int(p.get('amount', 0)/100)} Quiz Plan" if p.get("amount") else "Standard Plan"
             
         # Attach entitlement info if paid
         if p.get("status") == "paid" and p.get("payment_id"):
             ent = await db.entitlements.find_one({"paymentId": p["payment_id"]})
             if ent:
                 p["quizLimit"] = ent.get("quizLimit")
-                p["usedQuizzes"] = ent.get("usedQuizzes")
-                p["remainingQuizzes"] = ent.get("remainingQuizzes")
-                p["activationCode"] = ent.get("activationCode")
-                p["validityDays"] = ent.get("validityDays")
-                p["entitlementStatus"] = ent.get("status")
-                if "validFrom" in ent: p["validFrom"] = ent["validFrom"].isoformat()
-                if "expiresAt" in ent: p["expiresAt"] = ent["expiresAt"].isoformat()
+                p["usedQuizzes"] = ent.get("usedQuizzes", 0)
+                p["remainingQuizzes"] = ent.get("remainingQuizzes", ent.get("quizLimit", 0))
+                p["activationCode"] = ent.get("activationCode", "-")
+                p["validityDays"] = ent.get("validityDays", 30)
+                p["entitlementStatus"] = ent.get("status", "ACTIVE")
+                if "validFrom" in ent and hasattr(ent["validFrom"], 'isoformat'): 
+                    p["validFrom"] = ent["validFrom"].isoformat()
+                elif "validFrom" in ent:
+                    p["validFrom"] = str(ent["validFrom"])
+                if "expiresAt" in ent and hasattr(ent["expiresAt"], 'isoformat'): 
+                    p["expiresAt"] = ent["expiresAt"].isoformat()
+                elif "expiresAt" in ent:
+                    p["expiresAt"] = str(ent["expiresAt"])
                 
     return {"success": True, "payments": payments}
 

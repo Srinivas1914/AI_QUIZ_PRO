@@ -15,6 +15,45 @@ const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
+// ─── PYTHON BACKEND REVERSE PROXY ─────────────────────────────
+app.use('/py-api', (req, res) => {
+  const pyPort = process.env.PYTHON_PORT || 5000;
+  const targetPath = req.originalUrl;
+  
+  const headers = { ...req.headers, host: `127.0.0.1:${pyPort}` };
+  delete headers['content-length'];
+
+  let bodyData = null;
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body && Object.keys(req.body).length > 0) {
+    bodyData = JSON.stringify(req.body);
+    headers['content-type'] = 'application/json';
+    headers['content-length'] = Buffer.byteLength(bodyData);
+  }
+
+  const options = {
+    hostname: '127.0.0.1',
+    port: pyPort,
+    path: targetPath,
+    method: req.method,
+    headers: headers
+  };
+
+  const pyReq = http.request(options, (pyRes) => {
+    res.writeHead(pyRes.statusCode, pyRes.headers);
+    pyRes.pipe(res);
+  });
+
+  pyReq.on('error', (err) => {
+    console.error(`[PROXY] Error forwarding ${req.method} ${targetPath}:`, err.message);
+    res.status(502).json({ success: false, message: 'Python service unavailable. Ensure python app.py is running on port ' + pyPort });
+  });
+
+  if (bodyData) {
+    pyReq.write(bodyData);
+  }
+  pyReq.end();
+});
+
 // Serve built assets from 'dist' directory in production, otherwise serve root
 const isProduction = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
 let staticDir = isProduction ? path.join(__dirname, 'dist') : __dirname;
@@ -170,6 +209,70 @@ app.post('/api/register', async (req, res) => {
   } catch (err) {
     console.error('[AUTH] Registration error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ─── DEDICATED USER DELETION API ──────────────────────────────
+app.post('/api/users/delete', async (req, res) => {
+  try {
+    const { id } = req.body;
+    const token = req.headers.authorization?.replace('Bearer ', '') || req.body.token;
+    if (!id) return res.status(400).json({ success: false, message: 'User ID required' });
+    
+    let decoded = null;
+    if (token) {
+      try {
+        decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
+      } catch (e) {}
+    }
+
+    if (!decoded || decoded.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin authorization required' });
+    }
+
+    let users = [];
+    try {
+      users = JSON.parse(syncData['sq_users'] || '[]');
+    } catch (e) {}
+
+    // Deduplicate and filter out deleted user ID
+    const map = new Map();
+    users.forEach(u => {
+      if (u && u.id && u.id !== id) map.set(u.id, u);
+    });
+    const updatedUsers = Array.from(map.values());
+    const ts = Date.now();
+    const updatedVal = JSON.stringify(updatedUsers);
+
+    syncData['sq_users'] = updatedVal;
+    syncData['_ts_sq_users'] = ts;
+
+    await saveData('sq_users', updatedVal);
+    if (mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) {
+      await UserModel.deleteOne({ id });
+    }
+
+    // Broadcast with per-admin college filtering
+    const allSockets = await io.fetchSockets();
+    for (const s of allSockets) {
+      const targetUser = s.user;
+      let valToSend = updatedVal;
+      if (targetUser && targetUser.role === 'admin' && !targetUser.isSuper) {
+        const tAdminInst = (targetUser.college || '').trim().toLowerCase();
+        const filtered = updatedUsers.filter(u => {
+          const uInst = (u.college || '').trim().toLowerCase();
+          return (uInst && tAdminInst && uInst === tAdminInst) || (targetUser.quizId && u.currentQuizId === targetUser.quizId);
+        });
+        valToSend = JSON.stringify(filtered);
+      }
+      s.emit('sync', { key: 'sq_users', val: valToSend, _ts: ts });
+    }
+
+    console.log(`[AUTH] User ${id} deleted by Admin ${decoded.name || 'Admin'}. Remaining count: ${updatedUsers.length}`);
+    res.json({ success: true, count: updatedUsers.length });
+  } catch (err) {
+    console.error('[AUTH] User delete error:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -497,10 +600,14 @@ async function saveData(key, val) {
     syncData[key] = val;
     syncData[`_ts_${key}`] = timestamp;
 
-    // Persist to local file (Safety Fallback) - Use async for better performance
-    fs.writeFile(DATA_FILE, JSON.stringify(syncData, null, 2), (fsErr) => {
-      if(fsErr) console.warn('[SERVER] File write failed:', fsErr.message);
-    });
+    // Persist to local file safely (Safety Fallback)
+    try {
+      const tmpFile = DATA_FILE + '.tmp';
+      fs.writeFileSync(tmpFile, JSON.stringify(syncData, null, 2), 'utf8');
+      fs.renameSync(tmpFile, DATA_FILE);
+    } catch (fsErr) {
+      fs.writeFile(DATA_FILE, JSON.stringify(syncData, null, 2), () => {});
+    }
 
     // Check connection state for MongoDB
     const state = mongoose.connection.readyState;
@@ -612,45 +719,50 @@ io.on('connection', (socket) => {
       const decoded = jwt.verify(token, JWT_SECRET);
       
       // ADMIN-COLLEGE DATA ISOLATION FOR USERS
-      // ─── USER LIST SYNC (SECURE MERGING) ───
+      // ─── USER LIST SYNC (SECURE MERGING & DEDUPLICATION) ───
       if (data.key === 'sq_users') {
           try {
              let incomingUsers = JSON.parse(data.val || '[]');
              const timestamp = data._ts || Date.now();
 
+             // Deduplicate incoming list by ID
+             const incomingMap = new Map();
+             incomingUsers.forEach(u => { if (u && u.id) incomingMap.set(u.id, u); });
+             incomingUsers = Array.from(incomingMap.values());
+
+             let finalUsers = [];
              if (!decoded.isSuper) {
                 // NORMAL ADMIN: Only allowed to update users in their partition (college/quiz)
                 const currentAllUsersStr = syncData['sq_users'] || '[]';
-                const currentAllUsers = JSON.parse(currentAllUsersStr);
+                let currentAllUsers = [];
+                try { currentAllUsers = JSON.parse(currentAllUsersStr); } catch(e){}
 
                 const adminInst = (decoded.college || '').trim().toLowerCase();
                 const adminQuizId = decoded.quizId;
 
                 // 1. Keep users from other institutions/quizzes
                 const otherUsers = currentAllUsers.filter(u => {
+                   if (!u || !u.id) return false;
                    const uInst = (u.college || '').trim().toLowerCase();
                    const matchCollege = uInst && adminInst && uInst === adminInst;
                    const matchQuiz = adminQuizId && u.currentQuizId === adminQuizId;
                    return !(matchCollege || matchQuiz);
                 });
 
-                // 2. Merge others with the incoming (updated) institutional users
-                const mergedUsers = [...otherUsers, ...incomingUsers];
-                data.val = JSON.stringify(mergedUsers);
+                // 2. Combine and strictly deduplicate by user ID
+                const userMap = new Map();
+                otherUsers.forEach(u => { if (u && u.id) userMap.set(u.id, u); });
+                incomingUsers.forEach(u => { if (u && u.id) userMap.set(u.id, u); });
+                finalUsers = Array.from(userMap.values());
                 
-                console.log(`[SYNC] Merged ${incomingUsers.length} users from Admin ${decoded.name}. Global total: ${mergedUsers.length}`);
+                console.log(`[SYNC] Merged ${incomingUsers.length} users from Admin ${decoded.name}. Global unique total: ${finalUsers.length}`);
              } else {
-                // SUPERADMIN: Full overwrite with safety check
-                const currentUsersStr = syncData['sq_users'] || '[]';
-                const currentUsers = JSON.parse(currentUsersStr);
-                
-                if (currentUsers.length > 5 && incomingUsers.length === 0) {
-                   console.error(`[SYNC] BLOCKED: Superadmin ${decoded.name} tried to empty user list.`);
-                   return;
-                }
-                console.log(`[SYNC] Superadmin ${decoded.name} updated global user list. Count: ${incomingUsers.length}`);
+                // SUPERADMIN: Full overwrite with deduplication
+                finalUsers = incomingUsers;
+                console.log(`[SYNC] Superadmin ${decoded.name} updated global user list. Unique count: ${finalUsers.length}`);
              }
 
+             data.val = JSON.stringify(finalUsers);
              // Save the merged data
              syncData[data.key] = data.val;
              syncData[`_ts_${data.key}`] = timestamp;

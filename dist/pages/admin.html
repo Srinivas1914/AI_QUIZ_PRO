@@ -39,6 +39,31 @@
   
   /* Quiz Control Sync Badge */
   #c-template-badge { display: inline-flex; align-items: center; gap: 5px; background: rgba(240,180,41,0.15); color: var(--gold); border: 1px solid var(--gold); padding: 4px 10px; border-radius: 100px; font-size: 10px; font-weight: 700; margin-left:10px; }
+
+  /* Payment Animations */
+  .sad-bounce { animation: sadBounce 2s ease-in-out infinite; display: inline-block; }
+  @keyframes sadBounce {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    25% { transform: translateY(-8px) rotate(-5deg); }
+    50% { transform: translateY(0) rotate(0deg); }
+    75% { transform: translateY(-4px) rotate(5deg); }
+  }
+  .happy-pulse { animation: happyPulse 1.5s ease-in-out infinite; display: inline-block; }
+  @keyframes happyPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+  }
+  .confetti-pop { animation: confettiPop 0.6s ease-out; display: inline-block; }
+  @keyframes confettiPop {
+    0% { transform: scale(0) rotate(-30deg); opacity: 0; }
+    60% { transform: scale(1.2) rotate(10deg); opacity: 1; }
+    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+  }
+  .code-glow { animation: codeGlow 2s ease-in-out infinite; }
+  @keyframes codeGlow {
+    0%, 100% { box-shadow: 0 0 10px rgba(255,215,0,0.2); }
+    50% { box-shadow: 0 0 25px rgba(255,215,0,0.5), 0 0 50px rgba(255,215,0,0.2); }
+  }
 </style>
 </head>
 
@@ -63,6 +88,7 @@
       <div class="nav-item" data-sec="camera" onclick="openCameraMonitor()"><i>📷</i><span>Camera Monitor <span id="cam-alert-badge" class="badge badge-red hidden" style="font-size:8px;padding:1px 5px">0</span></span></div>
       <div class="nav-item" data-sec="activity" onclick="goSection('activity')"><i>📜</i><span>Activity</span></div>
       <div class="nav-item" data-sec="reports" onclick="goSection('reports')"><i>📊</i><span>Reports</span></div>
+      <div class="nav-item" data-sec="payments" onclick="goSection('payments')"><i>💳</i><span>Payments & Plan</span></div>
       <div class="nav-item" data-sec="settings" onclick="goSection('settings')"><i>⚙️</i><span>Settings</span></div>
       <div class="nav-item" style="margin-top:20px; border-top:1px solid rgba(255,255,255,0.05); padding-top:15px; color:var(--gold)" onclick="openGuidanceModal()"><i>📖</i><span>Admin Guidance</span></div>
     </nav>
@@ -348,6 +374,43 @@
         <div class="card">
           <div class="card-head"><span class="card-title">SAVED REPORTS</span></div>
           <div id="saved-reports-list" class="p-12"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PAYMENTS & PLAN -->
+    <section class="sec hidden" id="sec-payments">
+      <div class="sec-head">
+        <h2>PAYMENTS & PLAN</h2>
+        <button class="btn-sm btn-cyan" onclick="loadAdminPayments()">🔄 REFRESH</button>
+      </div>
+      <div class="dash-grid">
+        <div class="card" style="border-color:var(--gold)">
+          <div class="card-head" style="background:rgba(255,215,0,0.1)"><span class="card-title" style="color:var(--gold)">CURRENT PLAN STATUS</span></div>
+          <div style="padding:14px" id="admin-plan-status">
+            <div class="text-center text-muted text-sm py-4">Loading plan details...</div>
+          </div>
+          <div style="padding:14px; border-top:1px solid rgba(255,255,255,0.05); text-align:center">
+             <button class="btn-main btn-cyan" onclick="startRazorpayPayment(true)">BUY MORE CREDITS</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">PAYMENT HISTORY</span></div>
+          <div class="table-wrap" style="max-height:400px;overflow-y:auto">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>DATE</th>
+                  <th>ORDER ID</th>
+                  <th>AMOUNT (₹)</th>
+                  <th>STATUS</th>
+                </tr>
+              </thead>
+              <tbody id="admin-payments-body">
+                <tr><td colspan="4" class="text-center p-12 text-muted">Loading history...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
@@ -758,6 +821,49 @@
     </div>
     
     <button class="btn-main btn-gold mt-3" onclick="closeModal('modal-guidance')">GOT IT, LET'S GO!</button>
+  </div>
+</div>
+
+<!-- QUIZ ACTIVATION MODAL -->
+<div class="modal-bg" id="modal-activation">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-head">
+      <span style="color:var(--gold)">🔑 QUIZ ACTIVATION REQUIRED</span>
+      <button class="modal-x" onclick="closeModal('modal-activation')">✕</button>
+    </div>
+    <div id="activation-has-quota" class="hidden">
+      <p class="text-sm text-muted mb-2">You have active quiz quotas. Please enter your Activation Code to start this quiz.</p>
+      <div style="background:rgba(255,215,0,0.1); border:1px solid var(--gold); padding:10px; border-radius:6px; margin-bottom:15px;">
+        <div class="text-xs font-title" style="color:var(--gold)">ACTIVE ENTITLEMENTS</div>
+        <div id="act-quota-list" class="text-sm mt-1"></div>
+      </div>
+      <div class="form-group">
+        <label>ACTIVATION CODE</label>
+        <input type="text" id="act-code" placeholder="e.g. QUIZ-A1B2-C3D4" style="text-transform:uppercase; font-family:monospace; font-size:16px; text-align:center; letter-spacing:2px">
+      </div>
+      <div id="act-err" class="err-msg"></div>
+      <button class="btn-main btn-gold mt-2" onclick="verifyActivationCode()">VERIFY & START QUIZ</button>
+    </div>
+    
+    <div id="activation-no-quota" class="hidden text-center">
+      <div style="font-size:40px; margin-bottom:10px" class="sad-bounce">💳</div>
+      <p class="text-sm mb-3">You don't have any active quiz quota remaining. Purchase a license to conduct this quiz.</p>
+      <div style="background:rgba(255,255,255,0.05); border:1px solid var(--border); padding:15px; border-radius:6px; margin-bottom:15px; text-align:left">
+        <div class="text-xs text-muted">PLAN DETAILS</div>
+        <div class="font-title mt-1" style="font-size:18px" id="plan-amount">₹499</div>
+        <div class="text-sm mt-1" id="plan-desc">For 2 Quizzes (Valid 30 Days)</div>
+      </div>
+      <button class="btn-main btn-cyan" onclick="startRazorpayPayment(false)">PAY SECURELY WITH RAZORPAY</button>
+    </div>
+    
+    <div id="activation-success" class="hidden text-center">
+      <div style="font-size:40px; margin-bottom:10px; color:var(--green)" class="happy-pulse">✅</div>
+      <h3 style="color:var(--green)">PAYMENT SUCCESSFUL</h3>
+      <p class="text-sm text-muted mt-1">Your license is active. Here is your activation code:</p>
+      <div id="new-act-code" class="code-glow" style="background:var(--primary); color:white; padding:15px; font-family:monospace; font-size:24px; font-weight:bold; letter-spacing:4px; margin:15px 0; border-radius:8px"></div>
+      <p class="text-xs text-muted mb-2">Please copy this code safely. It has been saved to your entitlements.</p>
+      <button class="btn-main btn-green" onclick="useNewCode()">USE THIS CODE TO START</button>
+    </div>
   </div>
 </div>
 

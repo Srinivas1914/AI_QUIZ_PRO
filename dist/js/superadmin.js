@@ -2281,38 +2281,267 @@ function deleteSelectedRounds(){
 }
 
 // ─── PAYMENTS ─────────────────────────────────────────────────
+// ─── PAYMENTS & TRANSACTIONS ──────────────────────────────────
+window._loadedPayments = [];
+
 async function loadPayments() {
+  loadPaymentSettings();
+
   const tbody = document.getElementById('payments-body');
   if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="6" class="text-center p-12 text-muted">Loading payments...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="9" class="text-center p-12 text-muted">Loading payments...</td></tr>';
   try {
     const token = localStorage.getItem('sq_token');
-    const res = await fetch('http://localhost:5000/py-api/payments', {
+    const res = await fetch('/py-api/payments', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.detail || 'Failed to load');
     
+    window._loadedPayments = data.payments || [];
+
+    // Update summary cards
+    const totalRevenue = data.payments.filter(p => p.status === 'paid').reduce((sum, p) => sum + (p.amount || 0), 0);
+    const activePlans = data.payments.filter(p => p.entitlementStatus === 'ACTIVE').length;
+    const failedPayments = data.payments.filter(p => p.status === 'failed').length;
+    
+    const summaryEl = document.getElementById('payments-summary');
+    if (summaryEl) {
+      summaryEl.innerHTML = `
+        <div class="kpi green"><div class="kpi-val">₹${(totalRevenue / 100).toFixed(0)}</div><div class="kpi-lbl">TOTAL REVENUE</div></div>
+        <div class="kpi cyan"><div class="kpi-val">${data.payments.length}</div><div class="kpi-lbl">TOTAL TRANSACTIONS</div></div>
+        <div class="kpi purple"><div class="kpi-val">${activePlans}</div><div class="kpi-lbl">ACTIVE PLANS</div></div>
+        <div class="kpi red"><div class="kpi-val">${failedPayments}</div><div class="kpi-lbl">FAILED</div></div>
+      `;
+    }
+
     if (!data.payments || data.payments.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center p-12 text-muted">No payments found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center p-12 text-muted">No payments found.</td></tr>';
       return;
     }
     
-    tbody.innerHTML = data.payments.map(p => `
-      <tr>
-        <td class="text-xs text-muted">${new Date(p.created_at).toLocaleString()}</td>
-        <td class="font-title text-gold">${p.order_id}</td>
-        <td>${p.user_id}</td>
-        <td class="text-xs">${p.topic || '-'} (${p.count || 0})</td>
+    tbody.innerHTML = data.payments.map(p => {
+      const pKey = p.payment_id || p.order_id || p._id;
+      const adminDisplay = p.adminName ? `${p.adminName} <br><span class="text-xs text-muted font-mono">${p.adminEmail || p.user_id}</span>` : p.user_id;
+      const statusBadge = p.status === 'paid' ? 'badge-green' : (p.status === 'failed' ? 'badge-red' : 'badge-gold');
+      
+      return `
+      <tr style="cursor:pointer" onclick="openPaymentDashboard('${pKey}')">
+        <td class="text-xs text-muted">${new Date(p.created_at).toLocaleString('en-IN')}</td>
+        <td class="font-mono text-xs text-green">${p.payment_id || '<span class="text-muted">PENDING</span>'}</td>
+        <td class="font-mono text-xs text-gold">${p.order_id}</td>
+        <td><strong>${adminDisplay}</strong>${p.college && p.college !== '-' ? `<br><span class="badge badge-gray text-xs">${p.college}</span>` : ''}</td>
+        <td class="text-xs">Quota: <strong>${p.quizLimit || 2}</strong><br>Used: <span class="text-red">${p.usedQuizzes || 0}</span> / Rem: <span class="text-cyan font-bold">${p.remainingQuizzes !== undefined ? p.remainingQuizzes : (p.quizLimit || 2)}</span></td>
+        <td class="text-xs">${p.validFrom ? new Date(p.validFrom).toLocaleDateString('en-IN') : '-'} to<br>${p.expiresAt ? new Date(p.expiresAt).toLocaleDateString('en-IN') : '-'}</td>
         <td class="text-green font-title">₹${(p.amount / 100).toFixed(2)}</td>
         <td>
-          <span class="badge ${p.status === 'paid' ? 'badge-green' : (p.status === 'failed' ? 'badge-red' : 'badge-gold')}">${p.status.toUpperCase()}</span>
+          <span class="badge ${statusBadge}">${(p.status || 'CREATED').toUpperCase()}</span>
+          ${p.entitlementStatus ? `<br><span class="badge ${p.entitlementStatus === 'ACTIVE' ? 'badge-cyan' : 'badge-gray'} mt-1">${p.entitlementStatus}</span>` : ''}
+        </td>
+        <td>
+          <button class="btn-sm btn-cyan" onclick="event.stopPropagation(); openPaymentDashboard('${pKey}')">👁️ DETAILS</button>
         </td>
       </tr>
-    `).join('');
+    `}).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="text-center p-12 text-red">Error: ${err.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center p-12 text-red">Error: ${err.message}</td></tr>`;
   }
+}
+
+// ─── COMPREHENSIVE PAYMENT & LICENSE DASHBOARD MODAL ──────────
+function openPaymentDashboard(paymentIdOrOrderId) {
+  const p = (window._loadedPayments || []).find(item => 
+    item.payment_id === paymentIdOrOrderId || 
+    item.order_id === paymentIdOrOrderId || 
+    item._id === paymentIdOrOrderId
+  );
+  
+  if (!p) {
+    toast('Payment details not found', 'warning');
+    return;
+  }
+
+  const el = (id) => document.getElementById(id);
+  
+  // Status banner
+  const isPaid = p.status === 'paid';
+  const isFailed = p.status === 'failed';
+  const banner = el('pd-status-banner');
+  if (banner) {
+    banner.style.background = isPaid ? 'rgba(0,255,136,0.1)' : (isFailed ? 'rgba(255,59,48,0.1)' : 'rgba(255,215,0,0.1)');
+    banner.style.borderColor = isPaid ? 'rgba(0,255,136,0.3)' : (isFailed ? 'rgba(255,59,48,0.3)' : 'rgba(255,215,0,0.3)');
+  }
+  
+  if (el('pd-status-text')) {
+    el('pd-status-text').textContent = (p.status || 'PENDING').toUpperCase();
+    el('pd-status-text').style.color = isPaid ? 'var(--green)' : (isFailed ? 'var(--red)' : 'var(--gold)');
+  }
+  
+  if (el('pd-amount')) el('pd-amount').textContent = `₹${((p.amount || 0) / 100).toFixed(2)}`;
+
+  // Credits
+  const totalCredits = p.quizLimit || 2;
+  const usedCredits = p.usedQuizzes || 0;
+  const remCredits = p.remainingQuizzes !== undefined ? p.remainingQuizzes : Math.max(0, totalCredits - usedCredits);
+  
+  if (el('pd-credits-total')) el('pd-credits-total').textContent = totalCredits;
+  if (el('pd-credits-used')) el('pd-credits-used').textContent = usedCredits;
+  if (el('pd-credits-rem')) el('pd-credits-rem').textContent = remCredits;
+
+  // Admin Info
+  if (el('pd-admin-name')) el('pd-admin-name').textContent = p.adminName || p.user_id || 'Admin';
+  if (el('pd-admin-email')) el('pd-admin-email').textContent = p.adminEmail || p.user_id || '—';
+  if (el('pd-college')) el('pd-college').textContent = p.college || '—';
+  if (el('pd-user-id')) el('pd-user-id').textContent = p.user_id || '—';
+
+  // Transaction Info
+  if (el('pd-payment-id')) el('pd-payment-id').textContent = p.payment_id || 'N/A (Pending)';
+  if (el('pd-order-id')) el('pd-order-id').textContent = p.order_id || '—';
+  if (el('pd-date')) el('pd-date').textContent = new Date(p.created_at || Date.now()).toLocaleString('en-IN', {
+    dateStyle: 'full', timeStyle: 'medium'
+  });
+
+  // Package & Plan
+  if (el('pd-package')) el('pd-package').textContent = p.package || `₹${Math.round((p.amount || 0)/100)} Quiz Plan`;
+  if (el('pd-plan-status')) {
+    const pStat = p.entitlementStatus || (isPaid ? 'ACTIVE' : 'INACTIVE');
+    el('pd-plan-status').textContent = pStat;
+    el('pd-plan-status').className = `badge ${pStat === 'ACTIVE' ? 'badge-cyan' : 'badge-gray'}`;
+  }
+  if (el('pd-act-code')) el('pd-act-code').textContent = p.activationCode || 'ACT-' + (p.order_id ? p.order_id.slice(-6).toUpperCase() : 'PENDING');
+
+  // Validity
+  if (el('pd-valid-from')) el('pd-valid-from').textContent = p.validFrom ? new Date(p.validFrom).toLocaleDateString('en-IN') : new Date(p.created_at).toLocaleDateString('en-IN');
+  if (el('pd-expires-at')) el('pd-expires-at').textContent = p.expiresAt ? new Date(p.expiresAt).toLocaleDateString('en-IN') : '30 Days from Activation';
+  if (el('pd-validity-days')) el('pd-validity-days').textContent = `${p.validityDays || 30} Days`;
+
+  openModal('modal-payment-detail');
+}
+
+function copyPdCode() {
+  const code = document.getElementById('pd-act-code')?.textContent;
+  if (code && code !== '—') {
+    navigator.clipboard.writeText(code);
+    toast('Activation Code copied to clipboard: ' + code, 'success');
+  }
+}
+
+function printPdReceipt() {
+  window.print();
+}
+
+// ─── PAYMENT SETTINGS (SuperAdmin) ────────────────────────────
+async function loadPaymentSettings() {
+  try {
+    const token = localStorage.getItem('sq_token');
+    const resp = await fetch('/py-api/payment-settings', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await resp.json();
+    if (data.success && data.settings) {
+      const s = data.settings;
+      const el = (id) => document.getElementById(id);
+      if(el('pay-set-amount')) el('pay-set-amount').value = s.amount || 499;
+      if(el('pay-set-quizzes')) el('pay-set-quizzes').value = s.quizzesPerPayment || 2;
+      if(el('pay-set-validity')) el('pay-set-validity').value = s.validityDays || 30;
+      if(el('pay-set-discount')) el('pay-set-discount').value = s.discountPercent || 0;
+      if(el('pay-set-enabled')) el('pay-set-enabled').value = String(s.enabled !== false);
+      if(el('pay-set-ai-enabled')) el('pay-set-ai-enabled').value = String(s.aiPaymentRequired !== false);
+      if(el('pay-set-ai-free')) el('pay-set-ai-free').value = s.aiFreeLimit !== undefined ? s.aiFreeLimit : 0;
+      if(el('pay-set-ai-price')) el('pay-set-ai-price').value = s.aiPrice || 10;
+      if(el('pay-set-groq')) el('pay-set-groq').value = s.groqApiKey || '';
+    }
+  } catch (e) {
+    console.error('Failed to load payment settings', e);
+  }
+}
+
+async function savePaymentSettings() {
+  const amount = parseInt(document.getElementById('pay-set-amount').value) || 499;
+  const quizzesPerPayment = parseInt(document.getElementById('pay-set-quizzes').value) || 2;
+  const validityDays = parseInt(document.getElementById('pay-set-validity').value) || 30;
+  const discountPercent = parseInt(document.getElementById('pay-set-discount').value) || 0;
+  const enabled = document.getElementById('pay-set-enabled').value === 'true';
+  const aiPaymentRequired = document.getElementById('pay-set-ai-enabled') ? document.getElementById('pay-set-ai-enabled').value === 'true' : true;
+  const aiFreeLimit = document.getElementById('pay-set-ai-free') ? parseInt(document.getElementById('pay-set-ai-free').value) || 0 : 0;
+  const aiPrice = document.getElementById('pay-set-ai-price') ? parseInt(document.getElementById('pay-set-ai-price').value) || 10 : 10;
+  const groqEl = document.getElementById('pay-set-groq');
+  const groqApiKey = groqEl ? groqEl.value.trim() : '';
+  
+  try {
+    const token = localStorage.getItem('sq_token');
+    const resp = await fetch('/py-api/payment-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        amount, quizzesPerPayment, validityDays, discountPercent, enabled,
+        aiPaymentRequired, aiFreeLimit, aiPrice, groqApiKey
+      })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      // Also update local storage settings to mirror
+      const current = Store.getSettings();
+      Store.saveSettings({
+        ...current,
+        quiz_price: amount,
+        quizzes_per_license: quizzesPerPayment,
+        license_validity_days: validityDays,
+        quiz_payment_enabled: enabled,
+        ai_request_price: aiPrice,
+        ai_payment_required: aiPaymentRequired,
+        groq_api_key: groqApiKey
+      });
+      toast('Payment, Plan & AI Settings Saved Successfully!', 'success');
+      Store.addActivity('SuperAdmin updated payment & AI configuration', 'success', true);
+    } else {
+      toast('Failed: ' + (data.detail || 'Error'), 'error');
+    }
+  } catch (e) {
+    toast('Error saving settings: ' + e.message, 'error');
+  }
+}
+
+// ─── GENERAL SYSTEM SETTINGS (SuperAdmin) ─────────────────────
+function loadSettings() {
+  const s = Store.getSettings();
+  const el = (id) => document.getElementById(id);
+  if(el('s-admin-user')) el('s-admin-user').value = s.adminUsername || 'srinivas';
+  if(el('s-admin-pw')) el('s-admin-pw').value = s.adminPassword || 'sri@1119';
+  if(el('s-captcha')) el('s-captcha').value = s.captchaCode || 'QUIZ2026';
+  if(el('s-q-time')) el('s-q-time').value = s.defaultTimePerQuestion || 60;
+  if(el('s-p-time')) el('s-p-time').value = s.participantTimeLimit || 30;
+  if(el('s-overall-time')) el('s-overall-time').value = s.overallTimeLimit || 0;
+  if(el('s-ai-price')) el('s-ai-price').value = s.ai_request_price || 10;
+  if(el('s-instructions')) el('s-instructions').value = s.globalInstructions || '';
+  if(el('s-prize-1')) el('s-prize-1').value = (s.prizes && s.prizes[0]) || '🏆 Gold Medal + ₹5000';
+  if(el('s-prize-2')) el('s-prize-2').value = (s.prizes && s.prizes[1]) || '🥈 Silver Medal + ₹3000';
+  if(el('s-prize-3')) el('s-prize-3').value = (s.prizes && s.prizes[2]) || '🥉 Bronze Medal + ₹1000';
+}
+
+function saveSettings() {
+  const el = (id) => document.getElementById(id);
+  const current = Store.getSettings();
+  const updated = {
+    ...current,
+    adminUsername: el('s-admin-user') ? el('s-admin-user').value.trim() : (current.adminUsername || 'srinivas'),
+    adminPassword: el('s-admin-pw') ? el('s-admin-pw').value.trim() : (current.adminPassword || 'sri@1119'),
+    captchaCode: el('s-captcha') ? el('s-captcha').value.trim() : (current.captchaCode || 'QUIZ2026'),
+    defaultTimePerQuestion: el('s-q-time') ? parseInt(el('s-q-time').value) || 60 : current.defaultTimePerQuestion,
+    participantTimeLimit: el('s-p-time') ? parseInt(el('s-p-time').value) || 30 : current.participantTimeLimit,
+    overallTimeLimit: el('s-overall-time') ? parseInt(el('s-overall-time').value) || 0 : current.overallTimeLimit,
+    ai_request_price: el('s-ai-price') ? parseInt(el('s-ai-price').value) || 10 : (current.ai_request_price || 10),
+    globalInstructions: el('s-instructions') ? el('s-instructions').value.trim() : current.globalInstructions,
+    prizes: [
+      el('s-prize-1') ? el('s-prize-1').value.trim() : (current.prizes?.[0] || ''),
+      el('s-prize-2') ? el('s-prize-2').value.trim() : (current.prizes?.[1] || ''),
+      el('s-prize-3') ? el('s-prize-3').value.trim() : (current.prizes?.[2] || ''),
+    ]
+  };
+
+  Store.saveSettings(updated);
+  toast('SuperAdmin system settings saved successfully!', 'success');
+  Store.addActivity('SuperAdmin updated quiz system settings', 'success', true);
 }
 
 function resetAllRounds(){
@@ -2482,3 +2711,109 @@ window.addEventListener('quiz_cycle_halt', (e) => {
   const footer = document.querySelector('#modal-confirm .modal-foot');
   if(footer) footer.style.display = 'none';
 });
+
+// ─── ADMIN DETAILS MODAL (SUPERADMIN) ─────────────────────────
+async function openAdminDetails(adminId) {
+  const token = localStorage.getItem('sq_token');
+  if (!token) return;
+  
+  document.getElementById('ad-name').textContent = '🔍 ' + adminId;
+  document.getElementById('ad-login-count').textContent = '...';
+  document.getElementById('ad-last-login').textContent = '...';
+  document.getElementById('ad-created').textContent = '...';
+  document.getElementById('ad-total-paid').textContent = '...';
+  document.getElementById('ad-active-pkg').textContent = '...';
+  document.getElementById('ad-rem-quizzes').textContent = '...';
+  
+  openModal('modal-admin-details');
+  switchAdTab('logins');
+  
+  try {
+    const resp = await fetch(`http://localhost:5000/py-api/admin-details/${encodeURIComponent(adminId)}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await resp.json();
+    
+    if (!data.success) {
+      toast('Failed to load admin details', 'error');
+      return;
+    }
+    
+    // Account
+    document.getElementById('ad-login-count').textContent = data.loginCount || 0;
+    document.getElementById('ad-last-login').textContent = data.lastLogin ? new Date(data.lastLogin).toLocaleString() : 'Never';
+    document.getElementById('ad-created').textContent = data.logins.length ? new Date(data.logins[data.logins.length-1].loginAt).toLocaleDateString() : '—';
+    
+    // Payments
+    document.getElementById('ad-total-paid').textContent = '₹' + ((data.totalPaid || 0) / 100).toFixed(2);
+    document.getElementById('ad-active-pkg').innerHTML = data.activePackage 
+      ? '<span style="color:var(--green)">✅ YES</span>' 
+      : '<span style="color:var(--red)">❌ NO</span>';
+    document.getElementById('ad-rem-quizzes').innerHTML = `<span style="color:var(--cyan)">${data.remainingQuizzes || 0}</span>`;
+    
+    // Login History Tab
+    const loginBody = document.getElementById('ad-login-body');
+    if (data.logins.length) {
+      loginBody.innerHTML = data.logins.map(l => `<tr>
+        <td class="text-xs text-muted">${new Date(l.loginAt).toLocaleString()}</td>
+        <td class="text-xs">${l.ip || 'N/A'}</td>
+        <td class="text-xs">${(l.device || 'Unknown').substring(0, 50)}</td>
+      </tr>`).join('');
+    } else {
+      loginBody.innerHTML = '<tr><td colspan="3" class="text-center text-muted text-xs p-12">No login records</td></tr>';
+    }
+    
+    // Quiz History Tab
+    const quizBody = document.getElementById('ad-quiz-body');
+    if (data.quizActivations.length) {
+      quizBody.innerHTML = data.quizActivations.map(a => `<tr>
+        <td class="text-xs text-muted">${new Date(a.activatedAt).toLocaleString()}</td>
+        <td class="text-xs font-title">${a.quizId}</td>
+        <td class="text-xs">—</td>
+        <td class="text-xs">—</td>
+      </tr>`).join('');
+    } else {
+      quizBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted text-xs p-12">No quizzes conducted</td></tr>';
+    }
+    
+    // Payment History Tab
+    const payBody = document.getElementById('ad-payment-body');
+    if (data.payments.length) {
+      payBody.innerHTML = data.payments.map(p => {
+        let col = p.status==='paid'?'green':p.status==='failed'?'red':'gold';
+        return `<tr>
+          <td class="text-xs text-muted">${new Date(p.created_at).toLocaleString()}</td>
+          <td class="font-mono text-xs">${p.order_id}</td>
+          <td class="font-mono text-xs">₹${(p.amount/100).toFixed(2)}</td>
+          <td><span class="badge badge-${col}">${(p.status||'UNKNOWN').toUpperCase()}</span></td>
+        </tr>`;
+      }).join('');
+    } else {
+      payBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted text-xs p-12">No payment records</td></tr>';
+    }
+    
+  } catch(e) {
+    console.error('openAdminDetails error:', e);
+    toast('Error loading admin details: ' + e.message, 'error');
+  }
+}
+
+function switchAdTab(tab) {
+  document.querySelectorAll('.ad-tab-content').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.ltab').forEach(el => el.classList.remove('active'));
+  
+  document.getElementById('ad-tab-' + tab)?.classList.remove('hidden');
+  document.getElementById('btn-ad-' + tab)?.classList.add('active');
+}
+
+// ─── RECORD LOGIN ON SUPERADMIN PAGE LOAD ─────────────────────
+(async function recordLogin() {
+  try {
+    const token = localStorage.getItem('sq_token');
+    if (!token) return;
+    await fetch('http://localhost:5000/py-api/record-login', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+  } catch(e) { /* silent */ }
+})();

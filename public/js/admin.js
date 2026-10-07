@@ -390,6 +390,14 @@ function deleteSelectedUsers(){
     const all = Store.getUsers();
     const filtered = all.filter(u => !checked.includes(u.id));
     Store.saveUsers(filtered);
+    const token = localStorage.getItem('sq_token');
+    checked.forEach(id => {
+      fetch('/api/users/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ id, token })
+      }).catch(() => {});
+    });
     toast(`${checked.length} users deleted`, 'warning');
     renderUsers();
   });
@@ -1171,8 +1179,8 @@ async function quizStart(){
   const sess = Store.getSession();
   const quizId = sess.quizId || "LOCAL";
   
-  // Skip backend checks if already paid for this exact quiz locally
-  if (Store.isQuizPaid(quizId)) {
+  // Superadmin can run any quiz without payment
+  if (sess && sess.isSuper) {
     startQuizCore(rounds, questions, settings, teams);
     return;
   }
@@ -1180,8 +1188,8 @@ async function quizStart(){
   try {
     const token = localStorage.getItem('sq_token');
     
-    // Check payment settings to see if it's disabled
-    const setResp = await fetch('http://localhost:5000/py-api/payment-settings', {
+    // Check payment settings to see if it's disabled by superadmin
+    const setResp = await fetch('/py-api/payment-settings', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const setObj = await setResp.json();
@@ -1192,7 +1200,7 @@ async function quizStart(){
     }
     
     // Check if admin has active entitlements
-    const entResp = await fetch('http://localhost:5000/py-api/entitlements/current', {
+    const entResp = await fetch('/py-api/entitlements/current', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const entData = await entResp.json();
@@ -1201,14 +1209,22 @@ async function quizStart(){
     document.getElementById('activation-no-quota').classList.add('hidden');
     document.getElementById('activation-success').classList.add('hidden');
     
-    if (entData.success && entData.entitlements.length > 0) {
+    const validEntitlements = (entData.success && entData.entitlements) ? entData.entitlements.filter(e => (e.remainingQuizzes || 0) > 0) : [];
+
+    if (validEntitlements.length > 0) {
       document.getElementById('activation-has-quota').classList.remove('hidden');
       
       let html = '';
-      entData.entitlements.forEach(e => {
-        html += `<div style="display:flex; justify-content:space-between; margin-top:5px">
-          <span>Expires: ${new Date(e.expiresAt).toLocaleDateString()}</span>
-          <span class="badge badge-cyan">${e.remainingQuizzes} Quizzes Left</span>
+      validEntitlements.forEach(e => {
+        html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; padding:8px 12px; background:rgba(0,255,255,0.05); border:1px solid rgba(0,255,255,0.2); border-radius:6px">
+          <div>
+            <div class="text-xs">Activation Code: <code class="text-gold font-bold">${e.activationCode || '—'}</code></div>
+            <div class="text-xs text-muted">Expires: ${new Date(e.expiresAt).toLocaleDateString()}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px">
+            <span class="badge badge-cyan">${e.remainingQuizzes} Quizzes Left</span>
+            <button class="btn-sm btn-green" onclick="activateWithCode('${e.activationCode}')">▶ ACTIVATE & START</button>
+          </div>
         </div>`;
       });
       document.getElementById('act-quota-list').innerHTML = html;
@@ -1229,6 +1245,13 @@ async function quizStart(){
   } catch(e) {
     console.error(e);
     toast('Failed to check license status', 'error');
+  }
+}
+
+async function activateWithCode(code) {
+  if (code) {
+    document.getElementById('act-code').value = code;
+    await verifyActivationCode();
   }
 }
 
@@ -1253,7 +1276,7 @@ async function verifyActivationCode() {
   const token = localStorage.getItem('sq_token');
   
   try {
-    const resp = await fetch('http://localhost:5000/py-api/quiz-start/activate', {
+    const resp = await fetch('/py-api/quiz-start/activate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ code, quizId })
@@ -1283,7 +1306,7 @@ async function startRazorpayPayment(isFromSettings = false) {
     const quizId = sess.quizId || "LOCAL";
     const token = localStorage.getItem('sq_token');
     
-    const orderResp = await fetch('http://localhost:5000/py-api/quiz-start/create_order', {
+    const orderResp = await fetch('/py-api/quiz-start/create_order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ quizId })
@@ -1314,7 +1337,7 @@ async function startRazorpayPayment(isFromSettings = false) {
       order_id: orderData.order_id,
       handler: async function (response) {
         try {
-          const verifyResp = await fetch('http://localhost:5000/py-api/quiz-start/verify', {
+          const verifyResp = await fetch('/py-api/quiz-start/verify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({
@@ -1729,7 +1752,7 @@ async function generateAIQuestions(){
   
   try {
     const token = localStorage.getItem('sq_token');
-    const resp = await fetch('http://localhost:5000/py-api/ai/generate', {
+    const resp = await fetch('/py-api/ai/generate', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -1740,13 +1763,13 @@ async function generateAIQuestions(){
 
     const contentType = resp.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-      throw new Error('Server returned an invalid response. please check your Groq API key.');
+      throw new Error('Server returned an invalid response. Please check your Groq API key.');
     }
 
     const res = await resp.json();
     
     if (res.requirePayment) {
-      toast('Free limit reached. Proceeding to payment...', 'warning');
+      toast('Payment required for AI Question Generation. Proceeding to payment...', 'warning');
       await handleRazorpayPayment(topic, count, difficulty);
       return;
     }
@@ -1777,7 +1800,7 @@ async function handleRazorpayPayment(topic, count, difficulty) {
   try {
     // 1. Create Order
     const token = localStorage.getItem('sq_token');
-    const orderResp = await fetch('http://localhost:5000/py-api/payment/create_order', {
+    const orderResp = await fetch('/py-api/payment/create_order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ topic, count, difficulty })
@@ -1809,7 +1832,7 @@ async function handleRazorpayPayment(topic, count, difficulty) {
         try {
           loader.classList.remove('hidden');
           // 4. Verify Payment on Backend
-          const verifyResp = await fetch('http://localhost:5000/py-api/payment/verify', {
+          const verifyResp = await fetch('/py-api/payment/verify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({
@@ -2442,16 +2465,16 @@ window.addEventListener('quiz_cycle_warning', (e) => {
 async function loadPaymentSettings() {
   try {
     const token = localStorage.getItem('sq_token');
-    const resp = await fetch('http://localhost:5000/py-api/payment-settings', {
+    const resp = await fetch('/py-api/payment-settings', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const data = await resp.json();
     if (data.success && data.settings) {
-      document.getElementById('pay-set-amount').value = data.settings.amount || 499;
-      document.getElementById('pay-set-quizzes').value = data.settings.quizzesPerPayment || 2;
-      document.getElementById('pay-set-validity').value = data.settings.validityDays || 30;
-      document.getElementById('pay-set-discount').value = data.settings.discountPercent || 0;
-      document.getElementById('pay-set-enabled').value = String(data.settings.enabled !== false);
+      if(document.getElementById('pay-set-amount')) document.getElementById('pay-set-amount').value = data.settings.amount || 499;
+      if(document.getElementById('pay-set-quizzes')) document.getElementById('pay-set-quizzes').value = data.settings.quizzesPerPayment || 2;
+      if(document.getElementById('pay-set-validity')) document.getElementById('pay-set-validity').value = data.settings.validityDays || 30;
+      if(document.getElementById('pay-set-discount')) document.getElementById('pay-set-discount').value = data.settings.discountPercent || 0;
+      if(document.getElementById('pay-set-enabled')) document.getElementById('pay-set-enabled').value = String(data.settings.enabled !== false);
       if (document.getElementById('pay-set-groq')) {
         document.getElementById('pay-set-groq').value = data.settings.groqApiKey || '';
       }
@@ -2472,7 +2495,7 @@ async function savePaymentSettings() {
   
   try {
     const token = localStorage.getItem('sq_token');
-    const resp = await fetch('http://localhost:5000/py-api/payment-settings', {
+    const resp = await fetch('/py-api/payment-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({
@@ -2502,7 +2525,7 @@ async function loadPayments() {
   body.innerHTML = '<tr><td colspan="5" class="text-center p-12 text-muted">Loading payments...</td></tr>';
   
   try {
-    const resp = await fetch('http://localhost:5000/py-api/payments', {
+    const resp = await fetch('/py-api/payments', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const data = await resp.json();
@@ -2513,7 +2536,7 @@ async function loadPayments() {
         return `<tr>
           <td class="text-xs text-muted">${new Date(p.created_at).toLocaleString()}</td>
           <td class="font-mono text-xs">${p.order_id}</td>
-          <td class="font-title">${p.adminId || p.user_id || 'Unknown'}</td>
+          <td class="font-title">${p.adminName || p.adminId || p.user_id || 'Unknown'}</td>
           <td class="font-mono">₹${(p.amount/100).toFixed(2)}</td>
           <td><span class="badge badge-${statusColor}">${(p.status||'UNKNOWN').toUpperCase()}</span></td>
         </tr>`;
@@ -2537,9 +2560,9 @@ async function loadAdminPayments() {
   try {
     // Fetch entitlements and payment settings in parallel
     const [entResp, setResp, payResp] = await Promise.all([
-      fetch('http://localhost:5000/py-api/entitlements/current', { headers: { 'Authorization': `Bearer ${token}` } }),
-      fetch('http://localhost:5000/py-api/payment-settings', { headers: { 'Authorization': `Bearer ${token}` } }),
-      fetch('http://localhost:5000/py-api/payments', { headers: { 'Authorization': `Bearer ${token}` } })
+      fetch('/py-api/entitlements/current', { headers: { 'Authorization': `Bearer ${token}` } }),
+      fetch('/py-api/payment-settings', { headers: { 'Authorization': `Bearer ${token}` } }),
+      fetch('/py-api/payments', { headers: { 'Authorization': `Bearer ${token}` } })
     ]);
     
     const entData = await entResp.json();
@@ -2634,7 +2657,7 @@ async function loadAdminPayments() {
   try {
     const token = localStorage.getItem('sq_token');
     if (!token) return;
-    await fetch('http://localhost:5000/py-api/record-login', {
+    await fetch('/py-api/record-login', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     });

@@ -46,6 +46,7 @@ function renderSec(id){
   if(id==='camera')     renderCamera();
   if(id==='activity')   renderActivity();
   if(id==='reports')    loadSavedReports();
+  if(id==='payments')   loadAdminPayments();
   if(id==='settings')   loadSettings();
 }
 
@@ -389,6 +390,14 @@ function deleteSelectedUsers(){
     const all = Store.getUsers();
     const filtered = all.filter(u => !checked.includes(u.id));
     Store.saveUsers(filtered);
+    const token = localStorage.getItem('sq_token');
+    checked.forEach(id => {
+      fetch('/api/users/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ id, token })
+      }).catch(() => {});
+    });
     toast(`${checked.length} users deleted`, 'warning');
     renderUsers();
   });
@@ -1159,7 +1168,7 @@ function renderScoreboard(containerId){
 }
 
 // ─── QUIZ FLOW ─────────────────────────────────────────────────
-function quizStart(){
+async function quizStart(){
   const teams=Store.getActiveTeams(),questions=Store.getQuestions(),rounds=Store.getRounds(),settings=Store.getSettings();
   if(!teams.length){toast('No active teams!','error');return;}
   if(!questions.length){toast('No questions!','error');return;}
@@ -1167,11 +1176,219 @@ function quizStart(){
   const needed=getTotalConfiguredQs(rounds);
   if(questions.length<needed&&!confirm(`Only ${questions.length}/${needed} questions. Continue?`)) return;
 
+  const sess = Store.getSession();
+  const quizId = sess.quizId || "LOCAL";
+  
+  // Superadmin can run any quiz without payment
+  if (sess && sess.isSuper) {
+    startQuizCore(rounds, questions, settings, teams);
+    return;
+  }
+  
+  try {
+    const token = localStorage.getItem('sq_token');
+    
+    // Check payment settings to see if it's disabled by superadmin
+    const setResp = await fetch('/py-api/payment-settings', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const setObj = await setResp.json();
+    if(setObj.success && String(setObj.settings.enabled) === 'false') {
+      Store.setQuizPaid(quizId, true);
+      startQuizCore(rounds, questions, settings, teams);
+      return;
+    }
+    
+    // Check if admin has active entitlements
+    const entResp = await fetch('/py-api/entitlements/current', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const entData = await entResp.json();
+    
+    document.getElementById('activation-has-quota').classList.add('hidden');
+    document.getElementById('activation-no-quota').classList.add('hidden');
+    document.getElementById('activation-success').classList.add('hidden');
+    
+    const validEntitlements = (entData.success && entData.entitlements) ? entData.entitlements.filter(e => (e.remainingQuizzes || 0) > 0) : [];
+
+    if (validEntitlements.length > 0) {
+      document.getElementById('activation-has-quota').classList.remove('hidden');
+      
+      let html = '';
+      validEntitlements.forEach(e => {
+        html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; padding:8px 12px; background:rgba(0,255,255,0.05); border:1px solid rgba(0,255,255,0.2); border-radius:6px">
+          <div>
+            <div class="text-xs">Activation Code: <code class="text-gold font-bold">${e.activationCode || '—'}</code></div>
+            <div class="text-xs text-muted">Expires: ${new Date(e.expiresAt).toLocaleDateString()}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px">
+            <span class="badge badge-cyan">${e.remainingQuizzes} Quizzes Left</span>
+            <button class="btn-sm btn-green" onclick="activateWithCode('${e.activationCode}')">▶ ACTIVATE & START</button>
+          </div>
+        </div>`;
+      });
+      document.getElementById('act-quota-list').innerHTML = html;
+      
+    } else {
+      document.getElementById('activation-no-quota').classList.remove('hidden');
+      if(setObj.success) {
+        let base = setObj.settings.amount || 499;
+        let disc = setObj.settings.discountPercent || 0;
+        let finalAmt = base * (1 - disc/100);
+        document.getElementById('plan-amount').textContent = `₹${finalAmt.toFixed(0)}`;
+        document.getElementById('plan-desc').textContent = `For ${setObj.settings.quizzesPerPayment} Quizzes (Valid ${setObj.settings.validityDays} Days)`;
+      }
+    }
+    
+    openModal('modal-activation');
+    
+  } catch(e) {
+    console.error(e);
+    toast('Failed to check license status', 'error');
+  }
+}
+
+async function activateWithCode(code) {
+  if (code) {
+    document.getElementById('act-code').value = code;
+    await verifyActivationCode();
+  }
+}
+
+function useNewCode() {
+  const code = document.getElementById('new-act-code').textContent;
+  if(code) {
+    document.getElementById('act-code').value = code;
+    document.getElementById('activation-success').classList.add('hidden');
+    document.getElementById('activation-has-quota').classList.remove('hidden');
+    verifyActivationCode();
+  }
+}
+
+async function verifyActivationCode() {
+  const code = document.getElementById('act-code').value.trim();
+  const err = document.getElementById('act-err');
+  err.textContent = '';
+  if(!code) { err.textContent = 'Enter activation code'; return; }
+  
+  const sess = Store.getSession();
+  const quizId = sess.quizId || "LOCAL";
+  const token = localStorage.getItem('sq_token');
+  
+  try {
+    const resp = await fetch('/py-api/quiz-start/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ code, quizId })
+    });
+    const data = await resp.json();
+    
+    if(!data.success) {
+      err.textContent = data.detail || 'Activation failed';
+      return;
+    }
+    
+    toast('License Validated! Quiz is starting.', 'success');
+    closeModal('modal-activation');
+    Store.setQuizPaid(quizId, true);
+    
+    const teams=Store.getActiveTeams(),questions=Store.getQuestions(),rounds=Store.getRounds(),settings=Store.getSettings();
+    startQuizCore(rounds, questions, settings, teams);
+    
+  } catch(e) {
+    err.textContent = 'Server error during activation';
+  }
+}
+
+async function startRazorpayPayment(isFromSettings = false) {
+  try {
+    const sess = Store.getSession();
+    const quizId = sess.quizId || "LOCAL";
+    const token = localStorage.getItem('sq_token');
+    
+    const orderResp = await fetch('/py-api/quiz-start/create_order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ quizId })
+    });
+    
+    const orderData = await orderResp.json();
+    if (!orderData.success) {
+      if (orderData.alreadyPaid) return true;
+      throw new Error(orderData.detail || 'Failed to create payment order');
+    }
+    
+    if (!window.Razorpay) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.body.appendChild(script);
+      });
+    }
+    
+    const options = {
+      key: orderData.key_id,
+      amount: orderData.amount,
+      currency: orderData.currency,
+      name: "Quiz Activation License",
+      description: "Buy Quiz Credits",
+      order_id: orderData.order_id,
+      handler: async function (response) {
+        try {
+          const verifyResp = await fetch('/py-api/quiz-start/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature
+            })
+          });
+          
+          const verifyData = await verifyResp.json();
+          if (!verifyData.success) throw new Error(verifyData.detail || verifyData.message || 'Payment verification failed');
+          
+          if (isFromSettings) {
+            toast('Payment Successful! Plan activated.', 'success');
+            loadAdminPayments();
+          } else {
+            document.getElementById('activation-no-quota').classList.add('hidden');
+            document.getElementById('activation-success').classList.remove('hidden');
+            document.getElementById('new-act-code').textContent = verifyData.activationCode;
+          }
+          
+        } catch (e) {
+          toast('Verification Failed: ' + e.message, 'error');
+        }
+      },
+      prefill: { name: sess.name || "Admin" },
+      theme: { color: "#d4af37" }
+    };
+    
+    const rzp = new window.Razorpay(options);
+    rzp.on('payment.failed', function (response){
+      toast('Payment Failed: ' + response.error.description, 'error');
+    });
+    rzp.open();
+  } catch (e) {
+    toast('Payment Setup Failed: ' + e.message, 'error');
+  }
+}
+
+function useNewCode() {
+  const code = document.getElementById('new-act-code').textContent;
+  document.getElementById('activation-success').classList.add('hidden');
+  document.getElementById('activation-has-quota').classList.remove('hidden');
+  document.getElementById('act-code').value = code;
+}
+
+function startQuizCore(rounds, questions, settings, teams) {
   // Reset everything
   load(KEYS.TEAMS,[]).forEach(t=>Store.updateTeam(t.id,{score:0,correctCount:0,answers:{},passedQs:[],roundScores:{}}));
   Store.saveParticipants([]);
-  // Store.clearLoginStatus(); // Keep teams online when starting the quiz
-
+  
   const r0=rounds[0];
   const quiz={
     status:'round_intro',
@@ -1535,7 +1752,7 @@ async function generateAIQuestions(){
   
   try {
     const token = localStorage.getItem('sq_token');
-    const resp = await fetch('http://localhost:5000/py-api/ai/generate', {
+    const resp = await fetch('/py-api/ai/generate', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -1546,13 +1763,13 @@ async function generateAIQuestions(){
 
     const contentType = resp.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-      throw new Error('Server returned an invalid response. please check your Groq API key.');
+      throw new Error('Server returned an invalid response. Please check your Groq API key.');
     }
 
     const res = await resp.json();
     
     if (res.requirePayment) {
-      toast('Free limit reached. Proceeding to payment...', 'warning');
+      toast('Payment required for AI Question Generation. Proceeding to payment...', 'warning');
       await handleRazorpayPayment(topic, count, difficulty);
       return;
     }
@@ -1583,7 +1800,7 @@ async function handleRazorpayPayment(topic, count, difficulty) {
   try {
     // 1. Create Order
     const token = localStorage.getItem('sq_token');
-    const orderResp = await fetch('http://localhost:5000/py-api/payment/create_order', {
+    const orderResp = await fetch('/py-api/payment/create_order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ topic, count, difficulty })
@@ -1615,7 +1832,7 @@ async function handleRazorpayPayment(topic, count, difficulty) {
         try {
           loader.classList.remove('hidden');
           // 4. Verify Payment on Backend
-          const verifyResp = await fetch('http://localhost:5000/py-api/payment/verify', {
+          const verifyResp = await fetch('/py-api/payment/verify', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({
@@ -2244,5 +2461,207 @@ window.addEventListener('quiz_cycle_warning', (e) => {
   Store.addActivity(`⚖️ Round Imbalance detected (${remaining} questions left for ${teamsCount} teams)`, 'warning');
 });
 
-// End of Admin Script
+// ─── PAYMENTS & SETTINGS ──────────────────────────────────────
+async function loadPaymentSettings() {
+  try {
+    const token = localStorage.getItem('sq_token');
+    const resp = await fetch('/py-api/payment-settings', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await resp.json();
+    if (data.success && data.settings) {
+      if(document.getElementById('pay-set-amount')) document.getElementById('pay-set-amount').value = data.settings.amount || 499;
+      if(document.getElementById('pay-set-quizzes')) document.getElementById('pay-set-quizzes').value = data.settings.quizzesPerPayment || 2;
+      if(document.getElementById('pay-set-validity')) document.getElementById('pay-set-validity').value = data.settings.validityDays || 30;
+      if(document.getElementById('pay-set-discount')) document.getElementById('pay-set-discount').value = data.settings.discountPercent || 0;
+      if(document.getElementById('pay-set-enabled')) document.getElementById('pay-set-enabled').value = String(data.settings.enabled !== false);
+      if (document.getElementById('pay-set-groq')) {
+        document.getElementById('pay-set-groq').value = data.settings.groqApiKey || '';
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load payment settings', e);
+  }
+}
 
+async function savePaymentSettings() {
+  const amount = parseInt(document.getElementById('pay-set-amount').value);
+  const quizzesPerPayment = parseInt(document.getElementById('pay-set-quizzes').value);
+  const validityDays = parseInt(document.getElementById('pay-set-validity').value);
+  const discountPercent = parseInt(document.getElementById('pay-set-discount').value);
+  const enabled = document.getElementById('pay-set-enabled').value === 'true';
+  const groqEl = document.getElementById('pay-set-groq');
+  const groqApiKey = groqEl ? groqEl.value.trim() : '';
+  
+  try {
+    const token = localStorage.getItem('sq_token');
+    const resp = await fetch('/py-api/payment-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({
+        amount, quizzesPerPayment, validityDays, discountPercent, enabled, groqApiKey
+      })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      toast('Payment & System Settings Saved!', 'success');
+    } else {
+      toast('Failed: ' + (data.detail || 'Error'), 'error');
+    }
+  } catch (e) {
+    toast('Error saving settings', 'error');
+  }
+}
+
+async function loadPayments() {
+  const sess = Store.getSession();
+  if(!sess || (!sess.isSuper && sess.role !== 'admin')) return;
+  
+  loadPaymentSettings();
+  
+  const token = localStorage.getItem('sq_token');
+  const body = document.getElementById('payments-body');
+  if(!body) return;
+  body.innerHTML = '<tr><td colspan="5" class="text-center p-12 text-muted">Loading payments...</td></tr>';
+  
+  try {
+    const resp = await fetch('/py-api/payments', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await resp.json();
+    
+    if(data.success && data.payments.length) {
+      body.innerHTML = data.payments.map(p => {
+        let statusColor = p.status==='paid'?'green':p.status==='failed'?'red':'gold';
+        return `<tr>
+          <td class="text-xs text-muted">${new Date(p.created_at).toLocaleString()}</td>
+          <td class="font-mono text-xs">${p.order_id}</td>
+          <td class="font-title">${p.adminName || p.adminId || p.user_id || 'Unknown'}</td>
+          <td class="font-mono">₹${(p.amount/100).toFixed(2)}</td>
+          <td><span class="badge badge-${statusColor}">${(p.status||'UNKNOWN').toUpperCase()}</span></td>
+        </tr>`;
+      }).join('');
+    } else {
+      body.innerHTML = '<tr><td colspan="5" class="text-center p-12 text-muted">No transactions found</td></tr>';
+    }
+  } catch(e) {
+    body.innerHTML = '<tr><td colspan="5" class="text-center p-12 text-red">Failed to load payments</td></tr>';
+  }
+}
+
+// ─── ADMIN PAYMENTS PAGE ──────────────────────────────────────
+async function loadAdminPayments() {
+  const token = localStorage.getItem('sq_token');
+  if(!token) return;
+  
+  const planEl = document.getElementById('admin-plan-status');
+  const histBody = document.getElementById('admin-payments-body');
+  
+  try {
+    // Fetch entitlements and payment settings in parallel
+    const [entResp, setResp, payResp] = await Promise.all([
+      fetch('/py-api/entitlements/current', { headers: { 'Authorization': `Bearer ${token}` } }),
+      fetch('/py-api/payment-settings', { headers: { 'Authorization': `Bearer ${token}` } }),
+      fetch('/py-api/payments', { headers: { 'Authorization': `Bearer ${token}` } })
+    ]);
+    
+    const entData = await entResp.json();
+    const setData = await setResp.json();
+    const payData = await payResp.json();
+    
+    // Render plan status
+    if (entData.success && entData.entitlements.length > 0) {
+      let totalRemaining = 0;
+      let totalLimit = 0;
+      let latestExpiry = null;
+      let latestFrom = null;
+      
+      entData.entitlements.forEach(e => {
+        totalRemaining += e.remainingQuizzes;
+        totalLimit += e.quizLimit;
+        let exp = new Date(e.expiresAt);
+        if (!latestExpiry || exp > latestExpiry) latestExpiry = exp;
+        let from = new Date(e.validFrom);
+        if (!latestFrom || from > latestFrom) latestFrom = from;
+      });
+      
+      const used = totalLimit - totalRemaining;
+      const pct = totalLimit > 0 ? ((totalRemaining / totalLimit) * 100) : 0;
+      const barColor = pct > 50 ? 'var(--green)' : pct > 20 ? 'var(--gold)' : 'var(--red)';
+      
+      planEl.innerHTML = `
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:15px">
+          <div style="background:rgba(34,197,94,0.1); padding:12px; border-radius:8px; text-align:center; border:1px solid rgba(34,197,94,0.3)">
+            <div class="text-xs text-muted">STATUS</div>
+            <div class="font-title" style="font-size:16px; color:var(--green); margin-top:4px">✅ ACTIVE</div>
+          </div>
+          <div style="background:rgba(255,215,0,0.1); padding:12px; border-radius:8px; text-align:center; border:1px solid rgba(255,215,0,0.3)">
+            <div class="text-xs text-muted">PLAN</div>
+            <div class="font-title" style="font-size:16px; color:var(--gold); margin-top:4px">₹${setData.settings?.amount || 499}</div>
+          </div>
+        </div>
+        <div style="margin-bottom:12px">
+          <div style="display:flex; justify-content:space-between; margin-bottom:6px">
+            <span class="text-xs text-muted">Quiz Credits Used</span>
+            <span class="text-xs font-title">${used} / ${totalLimit}</span>
+          </div>
+          <div style="background:rgba(255,255,255,0.05); height:8px; border-radius:4px; overflow:hidden">
+            <div style="background:${barColor}; height:100%; width:${pct}%; border-radius:4px; transition:width 0.5s ease"></div>
+          </div>
+        </div>
+        <div class="text-sm"><strong>Remaining:</strong> <span style="color:var(--cyan)">${totalRemaining} Quizzes</span></div>
+        <div class="text-sm"><strong>Purchased:</strong> ${latestFrom ? latestFrom.toLocaleDateString() : '—'}</div>
+        <div class="text-sm"><strong>Valid Until:</strong> ${latestExpiry ? latestExpiry.toLocaleDateString() : '—'}</div>
+        <div class="text-sm"><strong>Validity:</strong> ${setData.settings?.validityDays || 30} days</div>
+      `;
+    } else {
+      // No active plan - sad animation
+      planEl.innerHTML = `
+        <div style="text-align:center; padding:20px 0">
+          <div class="sad-bounce" style="font-size:50px; margin-bottom:10px">😔</div>
+          <h3 style="color:var(--red); margin-bottom:8px">Oops! No Active Plan</h3>
+          <p class="text-sm text-muted">Your quiz credits are exhausted or you don't have an active package.</p>
+          <div style="background:rgba(255,255,255,0.03); padding:12px; border-radius:8px; margin-top:12px; border:1px solid var(--border)">
+            <div class="text-xs text-muted">AVAILABLE PLAN</div>
+            <div class="font-title" style="font-size:22px; color:var(--gold); margin-top:4px">₹${setData.settings?.amount || 499}</div>
+            <div class="text-xs text-muted mt-1">${setData.settings?.quizzesPerPayment || 2} Quizzes • ${setData.settings?.validityDays || 30} Days</div>
+          </div>
+        </div>
+      `;
+    }
+    
+    // Render payment history
+    if (payData.success && payData.payments.length) {
+      histBody.innerHTML = payData.payments.map(p => {
+        let statusColor = p.status==='paid'?'green':p.status==='failed'?'red':'gold';
+        return `<tr>
+          <td class="text-xs text-muted">${new Date(p.created_at).toLocaleString()}</td>
+          <td class="font-mono text-xs">${p.order_id}</td>
+          <td class="font-mono">₹${(p.amount/100).toFixed(2)}</td>
+          <td><span class="badge badge-${statusColor}">${(p.status||'UNKNOWN').toUpperCase()}</span></td>
+        </tr>`;
+      }).join('');
+    } else {
+      histBody.innerHTML = '<tr><td colspan="4" class="text-center p-12 text-muted">No payment history yet</td></tr>';
+    }
+    
+  } catch(e) {
+    console.error('loadAdminPayments error:', e);
+    if(planEl) planEl.innerHTML = '<div class="text-center text-red text-sm py-4">Failed to load plan details</div>';
+    if(histBody) histBody.innerHTML = '<tr><td colspan="4" class="text-center p-12 text-red">Error loading history</td></tr>';
+  }
+}
+
+// ─── RECORD LOGIN ON PAGE LOAD ────────────────────────────────
+(async function recordLogin() {
+  try {
+    const token = localStorage.getItem('sq_token');
+    if (!token) return;
+    await fetch('/py-api/record-login', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+  } catch(e) { /* silent */ }
+})();
+
+// End of Admin Script
