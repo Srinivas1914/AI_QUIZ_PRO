@@ -605,7 +605,7 @@ async def get_payments(request: Request, user: dict = Depends(get_current_user))
     admin_id = user.get('userId') or user.get('name')
     is_super = user.get('isSuper', False)
     
-    query = {} if is_super else {"adminId": admin_id}
+    query = {} if is_super else {"user_id": admin_id}
     
     cursor = db.payments.find(query).sort("created_at", -1).limit(100)
     payments = await cursor.to_list(length=100)
@@ -619,6 +619,19 @@ async def get_payments(request: Request, user: dict = Depends(get_current_user))
         if "failed_at" in p and hasattr(p["failed_at"], 'isoformat'):
             p["failed_at"] = p["failed_at"].isoformat()
             
+        # Attach entitlement info if paid
+        if p.get("status") == "paid" and p.get("payment_id"):
+            ent = await db.entitlements.find_one({"paymentId": p["payment_id"]})
+            if ent:
+                p["quizLimit"] = ent.get("quizLimit")
+                p["usedQuizzes"] = ent.get("usedQuizzes")
+                p["remainingQuizzes"] = ent.get("remainingQuizzes")
+                p["activationCode"] = ent.get("activationCode")
+                p["validityDays"] = ent.get("validityDays")
+                p["entitlementStatus"] = ent.get("status")
+                if "validFrom" in ent: p["validFrom"] = ent["validFrom"].isoformat()
+                if "expiresAt" in ent: p["expiresAt"] = ent["expiresAt"].isoformat()
+                
     return {"success": True, "payments": payments}
 
 # ─── ADMIN DETAILS (superadmin only) ────────────────────────────

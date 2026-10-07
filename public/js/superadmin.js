@@ -2074,7 +2074,7 @@ async function generateAIQuestions() {
 
   try {
     const token = localStorage.getItem('sq_token');
-    const response = await fetch('/api/ai/generate', {
+    const response = await fetch('http://localhost:5000/py-api/ai/generate', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -2294,24 +2294,28 @@ async function loadPayments() {
     if (!data.success) throw new Error(data.detail || 'Failed to load');
     
     if (!data.payments || data.payments.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center p-12 text-muted">No payments found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center p-12 text-muted">No payments found.</td></tr>';
       return;
     }
     
     tbody.innerHTML = data.payments.map(p => `
       <tr>
         <td class="text-xs text-muted">${new Date(p.created_at).toLocaleString()}</td>
+        <td class="font-mono text-xs">${p.payment_id || '-'}</td>
         <td class="font-title text-gold">${p.order_id}</td>
         <td>${p.user_id}</td>
-        <td class="text-xs">${p.topic || '-'} (${p.count || 0})</td>
+        <td class="text-xs">Total: ${p.quizLimit || '-'}<br>Used: <span class="text-red">${p.usedQuizzes !== undefined ? p.usedQuizzes : '-'}</span> / Rem: <span class="text-cyan">${p.remainingQuizzes !== undefined ? p.remainingQuizzes : '-'}</span></td>
+        <td class="text-xs">${p.validFrom ? new Date(p.validFrom).toLocaleDateString() : '-'} to<br>${p.expiresAt ? new Date(p.expiresAt).toLocaleDateString() : '-'}</td>
+        <td class="font-mono text-xs">${p.activationCode || '-'}</td>
         <td class="text-green font-title">₹${(p.amount / 100).toFixed(2)}</td>
         <td>
           <span class="badge ${p.status === 'paid' ? 'badge-green' : (p.status === 'failed' ? 'badge-red' : 'badge-gold')}">${p.status.toUpperCase()}</span>
+          ${p.entitlementStatus ? `<br><span class="badge ${p.entitlementStatus === 'ACTIVE' ? 'badge-cyan' : 'badge-gray'} mt-1">${p.entitlementStatus}</span>` : ''}
         </td>
       </tr>
     `).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="text-center p-12 text-red">Error: ${err.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center p-12 text-red">Error: ${err.message}</td></tr>`;
   }
 }
 

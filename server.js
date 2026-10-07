@@ -199,9 +199,25 @@ app.post('/api/ai/generate', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Topic and count are required.' });
     }
 
-    const groqKey = process.env.GROQ_API_KEY;
+    let groqKey = process.env.GROQ_API_KEY;
+    
+    // Fallback to reading python_backend/.env
+    if (!groqKey || groqKey.includes('YOUR_') || groqKey.includes('your_')) {
+      try {
+        const envPath = path.join(__dirname, 'python_backend', '.env');
+        if (require('fs').existsSync(envPath)) {
+          const envContent = require('fs').readFileSync(envPath, 'utf8');
+          const match = envContent.match(/^GROQ_API_KEY=(.+)$/m);
+          if (match && match[1]) {
+            groqKey = match[1].trim();
+          }
+        }
+      } catch (e) {
+        console.error('Failed to read python .env for Groq key', e);
+      }
+    }
 
-    if (!groqKey || groqKey.includes('YOUR_')) {
+    if (!groqKey || groqKey.includes('YOUR_') || groqKey.includes('your_')) {
       return res.status(401).json({ success: false, message: 'Missing valid GROQ_API_KEY in .env file.' });
     }
 
@@ -366,6 +382,8 @@ async function syncToCollections(key, val) {
   try {
     const data = JSON.parse(val);
     if (key === 'sq_users') {
+      const incomingIds = data.map(u => u.id);
+      await UserModel.deleteMany({ id: { $nin: incomingIds } });
       for (const u of data) {
         await UserModel.findOneAndUpdate({ id: u.id }, u, { upsert: true });
       }
