@@ -100,45 +100,46 @@ def generate_groq_questions(topic: str, count: int, difficulty: str) -> List[Dic
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
-    data = {
-        "model": "openai/gpt-oss-120b",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-        "response_format": {"type": "json_object"}
-    }
     
-    try:
-        res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, timeout=30)
-        res.raise_for_status()
-        result = res.json()
+    # Try primary model first, then fast fallback
+    models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+    last_err = None
+    
+    for model_name in models_to_try:
+        data = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "response_format": {"type": "json_object"}
+        }
         
-        content = result['choices'][0]['message']['content']
-        
-        # Simple extraction logic similar to Node.js backend
-        import re
-        match = re.search(r'\[[\s\S]*\]', content)
-        if match:
-            questions = json.loads(match.group(0))
-        else:
-            parsed = json.loads(content)
-            questions = parsed.get('questions', parsed if isinstance(parsed, list) else [parsed])
+        try:
+            res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, timeout=30)
+            if res.status_code == 200:
+                result = res.json()
+                content = result['choices'][0]['message']['content']
+                
+                # Simple extraction logic similar to Node.js backend
+                import re
+                match = re.search(r'\[[\s\S]*\]', content)
+                if match:
+                    questions = json.loads(match.group(0))
+                else:
+                    parsed = json.loads(content)
+                    questions = parsed.get('questions', parsed if isinstance(parsed, list) else [parsed])
+                    
+                if not isinstance(questions, list):
+                    questions = [questions]
+                    
+                return questions
+            else:
+                last_err = f"HTTP {res.status_code}: {res.text}"
+                print(f"[Groq Model {model_name} Error] {last_err}")
+        except Exception as e:
+            last_err = str(e)
+            print(f"[Groq Model {model_name} Exception] {e}")
             
-        if not isinstance(questions, list):
-            questions = [questions]
-            
-        return questions
-        
-    except requests.exceptions.RequestException as e:
-        print(f"[Groq API Error] {e}")
-        if hasattr(e, 'response') and e.response is not None:
-             print(f"Response: {e.response.text}")
-        raise HTTPException(status_code=502, detail="Failed to connect to AI service")
-    except json.JSONDecodeError as e:
-        print(f"[JSON Decode Error] {e} on content: {content[:200]}")
-        raise HTTPException(status_code=500, detail="Failed to parse AI response")
-    except Exception as e:
-         print(f"[Unexpected Error] {e}")
-         raise HTTPException(status_code=500, detail="Server error processing AI generation")
+    raise HTTPException(status_code=502, detail=f"Failed to generate questions with Groq: {last_err}")
 
 @app.post("/py-api/ai/generate")
 async def ai_generate(request: Request, user: dict = Depends(get_current_user)):
@@ -162,38 +163,62 @@ async def ai_generate(request: Request, user: dict = Depends(get_current_user)):
     # Check usage in MongoDB
     user_record = await db.ai_usage.find_one({"user_id": user_id})
     if not user_record:
-        user_record = {"user_id": user_id, "free_requests_used": 0}
+        user_record = {"user_id": user_id, "free_requests_used": 0, "paid_credits": 0}
         await db.ai_usage.insert_one(user_record)
         
     free_used = user_record.get('free_requests_used', 0)
+    paid_credits = user_record.get('paid_credits', 0)
     
-    if not is_super and ai_payment_req and free_used >= ai_free_limit:
-        return {
-            "requirePayment": True,
-            "limitReached": True,
-            "message": "AI Question Generation requires payment.",
-            "price": ai_price
-        }
+    if not is_super and ai_payment_req:
+        if free_used >= ai_free_limit and paid_credits <= 0:
+            return {
+                "requirePayment": True,
+                "limitReached": True,
+                "message": "AI Question Generation requires payment.",
+                "price": ai_price,
+                "freeLimit": ai_free_limit,
+                "freeUsed": free_used,
+                "paidCredits": paid_credits
+            }
         
     # Generate Questions
     questions = generate_groq_questions(topic, count, difficulty)
     
     # Increment usage count and log request if not superadmin
     if not is_super:
-        await db.ai_usage.update_one(
-            {"user_id": user_id},
-            {"$inc": {"free_requests_used": 1}}
-        )
+        if free_used < ai_free_limit:
+            await db.ai_usage.update_one(
+                {"user_id": user_id},
+                {"$inc": {"free_requests_used": 1}}
+            )
+            req_type = "free"
+            remaining_free = max(0, ai_free_limit - (free_used + 1))
+        else:
+            await db.ai_usage.update_one(
+                {"user_id": user_id},
+                {"$inc": {"paid_credits": -1}}
+            )
+            req_type = "paid_credit"
+            remaining_free = 0
+            paid_credits = max(0, paid_credits - 1)
+            
         await db.ai_requests.insert_one({
             "user_id": user_id,
-            "type": "free" if free_used < ai_free_limit else "paid",
+            "type": req_type,
             "status": "SUCCESS",
             "topic": topic,
             "count": count,
             "created_at": datetime.utcnow()
         })
+    else:
+        remaining_free = 999
         
-    return {"success": True, "questions": questions, "freeRequestsRemaining": max(0, ai_free_limit - (free_used + 1))}
+    return {
+        "success": True, 
+        "questions": questions, 
+        "freeRequestsRemaining": remaining_free,
+        "paidCreditsRemaining": paid_credits
+    }
 
 @app.post("/py-api/payment/create_order")
 async def create_payment_order(request: Request, user: dict = Depends(get_current_user)):
@@ -769,5 +794,6 @@ async def get_admin_details(admin_id: str, request: Request, user: dict = Depend
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"Starting Python Backend on port {PORT}...")
-    uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=True)
+    is_dev = os.getenv("NODE_ENV") != "production" and os.getenv("RENDER") != "true" and os.getenv("ENV") == "development"
+    print(f"Starting Python Backend on port {PORT} (reload={is_dev})...")
+    uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=is_dev)

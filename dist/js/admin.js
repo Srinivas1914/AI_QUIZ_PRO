@@ -1752,7 +1752,43 @@ async function generateAIQuestions(){
   
   try {
     const token = localStorage.getItem('sq_token');
-    const resp = await fetch('/py-api/ai/generate', {
+    
+    // --- STEP 1: Check if AI payment is required via Python backend ---
+    let needsPayment = false;
+    try {
+      const checkResp = await fetch('/py-api/ai/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ topic, count, difficulty })
+      });
+      const checkContentType = checkResp.headers.get('content-type') || '';
+      if (checkContentType.includes('application/json')) {
+        const checkRes = await checkResp.json();
+        if (checkRes.requirePayment) {
+          needsPayment = true;
+        } else if (checkRes.success && checkRes.questions) {
+          // Python backend returned questions directly — use them
+          aiGeneratedResults = checkRes.questions;
+          renderAIPreview();
+          preview.classList.remove('hidden');
+          setTimeout(() => preview.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+          toast(`Successfully generated ${aiGeneratedResults.length} questions!`,'success');
+          return;
+        }
+      }
+    } catch(pyErr) {
+      // Python backend unreachable — that's OK, fall through to Node.js
+      console.warn('[AI] Python backend unreachable, using Node.js direct:', pyErr.message);
+    }
+    
+    if (needsPayment) {
+      toast('Payment required for AI Question Generation. Proceeding to payment...', 'warning');
+      await handleRazorpayPayment(topic, count, difficulty);
+      return;
+    }
+    
+    // --- STEP 2: Use Node.js direct endpoint (always available) ---
+    const resp = await fetch('/api/ai/generate', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -1768,18 +1804,11 @@ async function generateAIQuestions(){
 
     const res = await resp.json();
     
-    if (res.requirePayment) {
-      toast('Payment required for AI Question Generation. Proceeding to payment...', 'warning');
-      await handleRazorpayPayment(topic, count, difficulty);
-      return;
-    }
-
-    if(!res.success){ throw new Error(res.message || 'Generation failed'); }
+    if(!res.success){ throw new Error(res.message || res.detail || 'Generation failed'); }
     
     aiGeneratedResults = res.questions;
     renderAIPreview();
     preview.classList.remove('hidden');
-    // Force scroll to preview
     setTimeout(() => preview.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
     toast(`Successfully generated ${aiGeneratedResults.length} questions!`,'success');
   } catch(e) {
@@ -2468,6 +2497,10 @@ async function loadPaymentSettings() {
     const resp = await fetch('/py-api/payment-settings', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
+    if (!resp.ok && resp.status === 502) {
+      console.warn('[PaymentSettings] Python backend unavailable, using defaults');
+      return;
+    }
     const data = await resp.json();
     if (data.success && data.settings) {
       if(document.getElementById('pay-set-amount')) document.getElementById('pay-set-amount').value = data.settings.amount || 499;
@@ -2480,7 +2513,7 @@ async function loadPaymentSettings() {
       }
     }
   } catch (e) {
-    console.error('Failed to load payment settings', e);
+    console.warn('Payment settings unavailable (Python backend may be starting):', e.message);
   }
 }
 
@@ -2559,10 +2592,21 @@ async function loadAdminPayments() {
   
   try {
     // Fetch entitlements and payment settings in parallel
+    // Each fetch is wrapped to handle Python backend being unavailable
+    const safeFetch = async (url, opts) => {
+      try {
+        const resp = await fetch(url, opts);
+        if (resp.status === 502) return { ok: false, json: async () => ({ success: false }) };
+        return resp;
+      } catch(e) {
+        return { ok: false, json: async () => ({ success: false }) };
+      }
+    };
+    
     const [entResp, setResp, payResp] = await Promise.all([
-      fetch('/py-api/entitlements/current', { headers: { 'Authorization': `Bearer ${token}` } }),
-      fetch('/py-api/payment-settings', { headers: { 'Authorization': `Bearer ${token}` } }),
-      fetch('/py-api/payments', { headers: { 'Authorization': `Bearer ${token}` } })
+      safeFetch('/py-api/entitlements/current', { headers: { 'Authorization': `Bearer ${token}` } }),
+      safeFetch('/py-api/payment-settings', { headers: { 'Authorization': `Bearer ${token}` } }),
+      safeFetch('/py-api/payments', { headers: { 'Authorization': `Bearer ${token}` } })
     ]);
     
     const entData = await entResp.json();

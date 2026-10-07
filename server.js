@@ -332,7 +332,7 @@ app.post('/api/ai/generate', async (req, res) => {
       Format: [{"text":"...","options":["A","B","C","D"],"correct":[0],"explanation":"..."}]`;
 
       const data = JSON.stringify({
-        model: 'openai/gpt-oss-120b',
+        model: 'llama-3.3-70b-versatile',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.7,
         response_format: { type: "json_object" }
@@ -860,3 +860,68 @@ function startServer() {
 // Kick off connection
 connectDB();
 
+// ─── AUTO-LAUNCH PYTHON BACKEND ──────────────────────────────
+// Spawn python_backend/app.py as a child process so the /py-api proxy works
+// This enables single-command deployment on Render and local dev
+(function launchPythonBackend() {
+  const pyPort = process.env.PYTHON_PORT || 5000;
+  const pyDir = path.join(__dirname, 'python_backend');
+  const pyScript = path.join(pyDir, 'app.py');
+
+  if (!fs.existsSync(pyScript)) {
+    console.warn('[PYTHON] python_backend/app.py not found. Python backend will not start.');
+    return;
+  }
+
+  // Try python3 first, then python
+  const { spawn } = require('child_process');
+  const tryCommands = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
+  
+  function tryStart(cmdIdx) {
+    if (cmdIdx >= tryCommands.length) {
+      console.warn('[PYTHON] ⚠️ Python not found. Payment/Entitlement APIs will be unavailable.');
+      console.warn('[PYTHON]   AI generation will still work via Node.js direct endpoint.');
+      return;
+    }
+    
+    const cmd = tryCommands[cmdIdx];
+    console.log(`[PYTHON] Attempting to start Python backend with '${cmd}'...`);
+    
+    const pyProcess = spawn(cmd, ['app.py'], {
+      cwd: pyDir,
+      env: { ...process.env, PORT: String(pyPort) },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    pyProcess.stdout.on('data', (data) => {
+      const lines = data.toString().trim().split('\n');
+      lines.forEach(line => console.log(`[PYTHON] ${line}`));
+    });
+
+    pyProcess.stderr.on('data', (data) => {
+      const lines = data.toString().trim().split('\n');
+      lines.forEach(line => console.log(`[PYTHON] ${line}`));
+    });
+
+    pyProcess.on('error', (err) => {
+      console.warn(`[PYTHON] Failed to start with '${cmd}': ${err.message}`);
+      tryStart(cmdIdx + 1);
+    });
+
+    pyProcess.on('exit', (code, signal) => {
+      if (code !== null && code !== 0) {
+        console.warn(`[PYTHON] Process exited with code ${code}. Trying next command...`);
+        tryStart(cmdIdx + 1);
+      } else if (signal) {
+        console.log(`[PYTHON] Process killed by signal ${signal}`);
+      }
+    });
+
+    // Clean up on Node.js exit
+    process.on('exit', () => { try { pyProcess.kill(); } catch(e) {} });
+    process.on('SIGTERM', () => { try { pyProcess.kill(); } catch(e) {} process.exit(0); });
+    process.on('SIGINT', () => { try { pyProcess.kill(); } catch(e) {} process.exit(0); });
+  }
+
+  tryStart(0);
+})();
