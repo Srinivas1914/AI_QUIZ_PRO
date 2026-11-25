@@ -2827,6 +2827,14 @@ async function loadPaymentSettings() {
                 el('pay-set-ai-free').value = s.aiFreeLimit !== undefined ? s.aiFreeLimit : 0;
             if (el('pay-set-ai-price'))
                 el('pay-set-ai-price').value = s.aiPrice !== undefined ? s.aiPrice : 10;
+            if (el('pay-set-ai-credits'))
+                el('pay-set-ai-credits').value = s.aiCreditsPerPayment !== undefined ? s.aiCreditsPerPayment : 5;
+            if (el('pay-set-max-q'))
+                el('pay-set-max-q').value = s.maxQuestionsPerGen !== undefined ? s.maxQuestionsPerGen : 20;
+            if (el('pay-set-ai-daily'))
+                el('pay-set-ai-daily').value = s.aiDailyLimit !== undefined ? s.aiDailyLimit : 50;
+            if (el('pay-set-groq-model'))
+                el('pay-set-groq-model').value = s.groqModel || 'llama-3.3-70b-versatile';
             if (el('pay-set-groq'))
                 el('pay-set-groq').value = s.groqApiKey || '';
         }
@@ -2850,8 +2858,14 @@ async function testGroqKey() {
         const data = await resp.json();
         if (data.success) {
             toast(data.message, 'success');
+            const modelsHtml = Array.isArray(data.models) && data.models.length
+                ? `<br><span class="text-muted">Available models: <code>${data.models.slice(0, 5).join(', ')}</code></span>`
+                : '';
             if (statusEl)
-                statusEl.innerHTML = `<span class="text-success fw-bold">✓ ${data.message}</span>`;
+                statusEl.innerHTML = `<span class="text-success fw-bold">✓ ${data.message}</span>${modelsHtml}`;
+            if (Array.isArray(data.models) && data.models.length && $id('pay-set-groq-model') && !data.models.includes($id('pay-set-groq-model').value)) {
+                $id('pay-set-groq-model').value = data.models[0];
+            }
         }
         else {
             toast(data.message || 'Invalid Groq API Key', 'error');
@@ -2881,20 +2895,28 @@ async function savePaymentSettings() {
     const aiPaymentRequired = $id('pay-set-ai-enabled') ? $id('pay-set-ai-enabled').value === 'true' : true;
     const aiFreeLimit = numVal('pay-set-ai-free', 0);
     const aiPrice = numVal('pay-set-ai-price', 10);
+    const aiCreditsPerPayment = numVal('pay-set-ai-credits', 5);
+    const maxQuestionsPerGen = numVal('pay-set-max-q', 20);
+    const aiDailyLimit = numVal('pay-set-ai-daily', 50);
+    const groqModel = ($id('pay-set-groq-model')?.value || 'llama-3.3-70b-versatile').trim();
     const groqEl = $id('pay-set-groq');
     const groqApiKey = groqEl ? groqEl.value.trim() : '';
     try {
         const token = localStorage.getItem('sq_token');
+        if (!token) {
+            toast('Session expired. Please login again.', 'error');
+            return;
+        }
         const resp = await fetch('/py-api/payment-settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({
                 amount, quizzesPerPayment, validityDays, discountPercent, enabled,
-                aiPaymentRequired, aiFreeLimit, aiPrice, groqApiKey
+                aiPaymentRequired, aiFreeLimit, aiPrice, aiCreditsPerPayment, maxQuestionsPerGen, aiDailyLimit, groqModel, groqApiKey
             })
         });
-        const data = await resp.json();
-        if (data.success) {
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok && data.success) {
             // Also update local storage settings to mirror
             const current = Store.getSettings();
             Store.saveSettings({
@@ -2909,9 +2931,14 @@ async function savePaymentSettings() {
             });
             toast('Payment, Plan & AI Settings Saved Successfully!', 'success');
             Store.addActivity('SuperAdmin updated payment & AI configuration', 'success', true);
+            await loadPaymentSettings();
+            if (typeof renderQuizPlansPreview === 'function')
+                renderQuizPlansPreview();
+            if (typeof loadPayments === 'function')
+                loadPayments();
         }
         else {
-            toast('Failed: ' + (data.detail || 'Error'), 'error');
+            toast('Failed: ' + (data.detail || data.message || `HTTP ${resp.status}`), 'error');
         }
     }
     catch (e) {

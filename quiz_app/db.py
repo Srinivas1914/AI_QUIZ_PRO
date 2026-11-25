@@ -253,6 +253,10 @@ def get_payment_config() -> Dict[str, Any]:
         'aiPaymentRequired': True,
         'aiFreeLimit': 0,
         'aiPrice': 10,
+        'aiCreditsPerPayment': 5,
+        'maxQuestionsPerGen': 20,
+        'aiDailyLimit': 50,
+        'groqModel': 'llama-3.3-70b-versatile',
         'groqApiKey': '',
     }
     db = get_mongo_db()

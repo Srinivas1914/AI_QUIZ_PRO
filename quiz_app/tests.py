@@ -1,10 +1,24 @@
 import json
+import tempfile
+from pathlib import Path
 from django.test import Client, TestCase
+import quiz_app.db as app_db
 
 
 class DjangoMigrationSmokeTests(TestCase):
     def setUp(self):
         self.client = Client()
+        self._orig_data_file = app_db.DATA_FILE
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        app_db.DATA_FILE = Path(self._tmp_dir.name) / 'test_data.json'
+        app_db._sync_data = {}
+        app_db._initialized = False
+
+    def tearDown(self):
+        app_db.DATA_FILE = self._orig_data_file
+        app_db._sync_data = {}
+        app_db._initialized = False
+        self._tmp_dir.cleanup()
 
     def test_all_html_pages_render_with_bootstrap_and_compiled_ts(self):
         routes = [
@@ -228,3 +242,163 @@ class DjangoMigrationSmokeTests(TestCase):
         self.assertEqual(pdf_resp.status_code, 200)
         self.assertEqual(pdf_resp['Content-Type'], 'application/pdf')
         self.assertTrue(pdf_resp.content.startswith(b'%PDF'))
+
+    def test_strict_ai_limit_and_payment_revalidation_flow(self):
+        from unittest.mock import patch, MagicMock
+        from quiz_app.db import insert_collection_item
+
+        # 1. SuperAdmin configures strict limits: aiPaymentRequired=True, aiFreeLimit=0, aiCreditsPerPayment=3, maxQuestionsPerGen=10
+        sa_login = self.client.post('/api/login', data=json.dumps({'username': 'srinivas', 'password': 'sri@1119'}), content_type='application/json')
+        sa_auth = {'HTTP_AUTHORIZATION': f"Bearer {sa_login.json()['token']}"}
+        self.client.post(
+            '/py-api/payment-settings',
+            data=json.dumps({
+                'amount': 499,
+                'enabled': True,
+                'aiPaymentRequired': True,
+                'aiFreeLimit': 0,
+                'aiPrice': 20,
+                'aiCreditsPerPayment': 3,
+                'maxQuestionsPerGen': 10,
+                'groqApiKey': 'gsk_test_mock_key',
+            }),
+            content_type='application/json',
+            **sa_auth,
+        )
+
+        # 2. Register & login a normal admin
+        self.client.post('/api/register', data=json.dumps({
+            'id': '_adm_limit_1',
+            'name': 'Limit Admin',
+            'username': 'limitadmin',
+            'password': 'pass1234',
+            'role': 'admin',
+            'college': 'Test Inst',
+            'currentQuizId': 'QZLIMIT1',
+        }), content_type='application/json')
+        adm_login = self.client.post('/api/login', data=json.dumps({'username': 'limitadmin', 'password': 'pass1234'}), content_type='application/json')
+        adm_auth = {'HTTP_AUTHORIZATION': f"Bearer {adm_login.json()['token']}"}
+
+        # 3. Exceeding maxQuestionsPerGen is blocked
+        over_max = self.client.post('/py-api/ai/generate', data=json.dumps({'topic': 'Math', 'count': 25}), content_type='application/json', **adm_auth)
+        self.assertEqual(over_max.status_code, 400)
+
+        # 4. Requesting AI generation with 0 free & 0 paid credits returns requirePayment=True
+        need_pay = self.client.post('/py-api/ai/generate', data=json.dumps({'topic': 'Physics', 'count': 3}), content_type='application/json', **adm_auth)
+        self.assertEqual(need_pay.status_code, 200)
+        self.assertTrue(need_pay.json()['requirePayment'])
+        self.assertEqual(need_pay.json()['price'], 20)
+
+        # 5. Quiz start via sync/push without activation is blocked (402)
+        sync_block = self.client.post(
+            '/api/sync/push',
+            data=json.dumps({'key': 'sq_quiz_QZLIMIT1', 'val': json.dumps({'status': 'running'})}),
+            content_type='application/json',
+            **adm_auth,
+        )
+        self.assertEqual(sync_block.status_code, 402)
+
+        # 6. Mark-failed order does NOT allocate credits
+        insert_collection_item('payments', {
+            'order_id': 'order_fail_check',
+            'user_id': '_adm_limit_1',
+            'amount': 2000,
+            'status': 'created',
+            'topic': 'Physics',
+            'count': 3,
+        })
+        self.client.post('/py-api/payment/mark-failed', data=json.dumps({'order_id': 'order_fail_check', 'reason': 'User cancelled'}), content_type='application/json', **adm_auth)
+        still_need = self.client.post('/py-api/ai/generate', data=json.dumps({'topic': 'Physics', 'count': 3}), content_type='application/json', **adm_auth)
+        self.assertTrue(still_need.json()['requirePayment'])
+
+        # 7. Simulate verified Razorpay payment -> allocates 3 credits & generates questions
+        insert_collection_item('payments', {
+            'order_id': 'order_ok_check',
+            'user_id': '_adm_limit_1',
+            'amount': 2000,
+            'status': 'created',
+            'topic': 'Physics',
+            'count': 2,
+            'difficulty': 'medium',
+        })
+        mock_rzp = MagicMock()
+        mock_rzp.utility.verify_payment_signature.return_value = True
+        mock_gen = {'questions': [{'text': 'Q1?', 'options': ['A', 'B', 'C', 'D'], 'correct': [0], 'explanation': 'E'}], 'model': 'llama-3.3-70b-versatile'}
+        with patch('quiz_app.api_views._get_rzp_client', return_value=(mock_rzp, 'rzp_test_x')), \
+             patch('quiz_app.api_views.generate_groq_questions', return_value=mock_gen):
+            ver_resp = self.client.post(
+                '/py-api/payment/verify',
+                data=json.dumps({
+                    'razorpay_order_id': 'order_ok_check',
+                    'razorpay_payment_id': 'pay_ok_check',
+                    'razorpay_signature': 'sig_ok',
+                }),
+                content_type='application/json',
+                **adm_auth,
+            )
+            self.assertEqual(ver_resp.status_code, 200)
+            self.assertTrue(ver_resp.json()['success'])
+            self.assertEqual(ver_resp.json()['creditsAdded'], 3)
+            self.assertEqual(ver_resp.json()['paidCreditsRemaining'], 2)
+
+            # 8. Idempotency check: re-verifying same order is rejected
+            dup_resp = self.client.post(
+                '/py-api/payment/verify',
+                data=json.dumps({
+                    'razorpay_order_id': 'order_ok_check',
+                    'razorpay_payment_id': 'pay_ok_check',
+                    'razorpay_signature': 'sig_ok',
+                }),
+                content_type='application/json',
+                **adm_auth,
+            )
+            self.assertEqual(dup_resp.status_code, 400)
+
+            # 9. Subsequent AI generation succeeds without payment using remaining credits
+            next_gen = self.client.post('/py-api/ai/generate', data=json.dumps({'topic': 'Chemistry', 'count': 2}), content_type='application/json', **adm_auth)
+            self.assertEqual(next_gen.status_code, 200)
+            self.assertTrue(next_gen.json()['success'])
+            self.assertEqual(next_gen.json()['paidCreditsRemaining'], 1)
+
+        # 10. Coupon discount applies to quiz-start order & increments usedCount on verify
+        from .db import upsert_collection_item, get_collection_items
+        self.client.post('/py-api/payment-settings', data=json.dumps({'amount': 500, 'discountPercent': 0, 'enabled': True, 'quizzesPerPayment': 2, 'validityDays': 30}), content_type='application/json', **sa_auth)
+        upsert_collection_item('coupons', 'code', 'SAVE50', {
+            'code': 'SAVE50',
+            'discountType': 'percent',
+            'discountValue': 50,
+            'maxRedemptions': 10,
+            'usedCount': 0,
+            'active': True,
+        })
+        mock_rzp_q = MagicMock()
+        mock_rzp_q.order.create.return_value = {'id': 'order_coupon_1', 'amount': 25000, 'currency': 'INR'}
+        mock_rzp_q.utility.verify_payment_signature.return_value = True
+        with patch('quiz_app.api_views._get_rzp_client', return_value=(mock_rzp_q, 'rzp_test_x')):
+            ord_resp = self.client.post(
+                '/py-api/quiz-start/create_order',
+                data=json.dumps({'quizId': 'QZCOUPON', 'couponCode': 'SAVE50'}),
+                content_type='application/json',
+                **adm_auth,
+            )
+            self.assertEqual(ord_resp.status_code, 200)
+            self.assertTrue(ord_resp.json()['success'])
+            self.assertEqual(mock_rzp_q.order.create.call_args.kwargs['data']['amount'], 25000)
+
+            ver_q = self.client.post(
+                '/py-api/quiz-start/verify',
+                data=json.dumps({
+                    'razorpay_order_id': 'order_coupon_1',
+                    'razorpay_payment_id': 'pay_coupon_1',
+                    'razorpay_signature': 'sig_coupon',
+                }),
+                content_type='application/json',
+                **adm_auth,
+            )
+            self.assertEqual(ver_q.status_code, 200)
+            self.assertTrue(ver_q.json()['success'])
+            from .db import get_collection_items
+            coupons = get_collection_items('coupons')
+            save50 = next((c for c in coupons if c.get('code') == 'SAVE50'), None)
+            self.assertIsNotNone(save50)
+            self.assertEqual(int(save50.get('usedCount', 0)), 1)

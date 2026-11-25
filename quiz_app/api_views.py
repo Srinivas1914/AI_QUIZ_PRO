@@ -3,6 +3,7 @@ import os
 import random
 import re
 import string
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -227,6 +228,24 @@ def api_sync_push(request):
     if not key:
         return JsonResponse({'success': False, 'message': 'Key required'}, status=400)
     ts = int(body.get('_ts') or time.time() * 1000)
+    # Enforce Quiz Start payment activation on backend for non-superadmins
+    if key.startswith('sq_quiz') and not user.get('isSuper', False):
+        try:
+            q_obj = json.loads(body.get('val')) if isinstance(body.get('val'), str) else (body.get('val') or {})
+            if isinstance(q_obj, dict) and q_obj.get('status') in ('round_intro', 'running'):
+                cfg = get_payment_config()
+                if cfg.get('enabled', True):
+                    qid = key.replace('sq_quiz_', '') if key.startswith('sq_quiz_') else (user.get('quizId') or 'LOCAL')
+                    admin_id = user.get('userId') or user.get('name')
+                    activations = get_collection_items('quiz_activations')
+                    if not any(a.get('adminId') == admin_id and a.get('quizId') == qid for a in activations):
+                        return JsonResponse({
+                            'success': False,
+                            'requirePayment': True,
+                            'message': 'Quiz activation license required before starting quiz.',
+                        }, status=402)
+        except Exception:
+            pass
     try:
         res = handle_sync_push(key, body.get('val'), user, ts)
         return JsonResponse({'success': True, **res})
@@ -301,6 +320,10 @@ def api_admin_perf(request):
 
 
 # ─── AI GENERATION ─────────────────────────────────────────────
+_usage_lock = threading.Lock()
+_payment_lock = threading.Lock()
+
+
 @csrf_exempt
 @require_http_methods(['POST'])
 def api_ai_test_key(request):
@@ -308,7 +331,7 @@ def api_ai_test_key(request):
     if not user or not user.get('isSuper'):
         return JsonResponse({'success': False, 'detail': 'Forbidden'}, status=403)
     body = _json_body(request)
-    from .ai_service import get_groq_api_key
+    from .ai_service import fetch_available_groq_models, get_groq_api_key
     key = (body.get('groqApiKey') or '').strip() or get_groq_api_key()
     if not key:
         return JsonResponse({'success': False, 'message': 'No Groq API key provided.'}, status=400)
@@ -316,7 +339,8 @@ def api_ai_test_key(request):
         import requests as req_lib
         r = req_lib.get('https://api.groq.com/openai/v1/models', headers={'Authorization': f'Bearer {key}'}, timeout=10)
         if r.status_code == 200:
-            return JsonResponse({'success': True, 'message': 'Groq API Key is valid and connected!'})
+            models = fetch_available_groq_models(key)
+            return JsonResponse({'success': True, 'message': f'Groq API Key connected! {len(models)} active models found.', 'models': models[:10]})
         return JsonResponse({'success': False, 'message': f'Groq rejected key (HTTP {r.status_code}). Check your key at console.groq.com.'}, status=400)
     except Exception as e:
         return JsonResponse({'success': False, 'message': f'Connection error: {e}'}, status=502)
@@ -325,19 +349,7 @@ def api_ai_test_key(request):
 @csrf_exempt
 @require_http_methods(['POST'])
 def api_ai_generate_direct(request):
-    body = _json_body(request)
-    topic = body.get('topic')
-    count = body.get('count')
-    difficulty = body.get('difficulty', 'medium')
-    if not topic or not count:
-        return JsonResponse({'success': False, 'message': 'Topic and count are required.'}, status=400)
-    try:
-        questions = generate_groq_questions(topic, int(count), difficulty)
-        return JsonResponse({'success': True, 'questions': questions})
-    except ValueError as e:
-        return JsonResponse({'success': False, 'message': str(e)}, status=401)
-    except Exception as e:
-        return JsonResponse({'success': False, 'message': str(e)}, status=502)
+    return py_ai_generate(request)
 
 
 @csrf_exempt
@@ -345,15 +357,16 @@ def api_ai_generate_direct(request):
 def py_ai_generate(request):
     user = get_current_user(request)
     if not user:
-        return JsonResponse({'detail': 'No token provided'}, status=401)
+        return JsonResponse({'success': False, 'detail': 'Authentication required', 'message': 'Authentication required'}, status=401)
 
     body = _json_body(request)
-    topic = body.get('topic')
-    count = body.get('count')
+    topic = (body.get('topic') or '').strip()
+    count_raw = body.get('count')
     difficulty = body.get('difficulty', 'medium')
-    if not topic or not count:
-        return JsonResponse({'detail': 'Topic and count required'}, status=400)
+    if not topic or not count_raw:
+        return JsonResponse({'success': False, 'detail': 'Topic and count required', 'message': 'Topic and count required'}, status=400)
 
+    count = _as_int(count_raw, 5)
     user_id = user.get('userId') or user.get('name') or 'unknown'
     is_super = bool(user.get('isSuper', False))
 
@@ -361,61 +374,122 @@ def py_ai_generate(request):
     ai_payment_req = bool(config.get('aiPaymentRequired', True))
     ai_free_limit = int(config.get('aiFreeLimit', 0))
     ai_price = int(config.get('aiPrice', 10))
+    ai_credits_pack = int(config.get('aiCreditsPerPayment', 5))
+    max_q_per_gen = int(config.get('maxQuestionsPerGen', 20))
+    ai_daily_limit = int(config.get('aiDailyLimit', 50))
 
-    usage_items = get_collection_items('ai_usage')
-    user_record = next((u for u in usage_items if u.get('user_id') == user_id), None)
-    if not user_record:
-        user_record = {'user_id': user_id, 'free_requests_used': 0, 'paid_credits': 0}
-        upsert_collection_item('ai_usage', 'user_id', user_id, user_record)
-
-    free_used = int(user_record.get('free_requests_used', 0))
-    paid_credits = int(user_record.get('paid_credits', 0))
-
-    if not is_super and ai_payment_req and free_used >= ai_free_limit and paid_credits <= 0:
+    if not is_super and count > max_q_per_gen:
         return JsonResponse({
-            'requirePayment': True,
-            'limitReached': True,
-            'message': 'AI Question Generation requires payment.',
-            'price': ai_price,
-            'freeLimit': ai_free_limit,
-            'freeUsed': free_used,
-            'paidCredits': paid_credits,
-        })
+            'success': False,
+            'detail': f'Requested {count} questions exceeds SuperAdmin limit of {max_q_per_gen} per generation.',
+            'message': f'Maximum {max_q_per_gen} questions allowed per generation.',
+        }, status=400)
+
+    from .billing_service import get_or_create_wallet, push_notification
+    today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    deducted_mode = None  # 'free' | 'paid' | None
+
+    with _usage_lock:
+        usage_items = get_collection_items('ai_usage')
+        user_record = next((u for u in usage_items if u.get('user_id') == user_id), None)
+        if not user_record:
+            user_record = {'user_id': user_id, 'free_requests_used': 0, 'paid_credits': 0}
+            upsert_collection_item('ai_usage', 'user_id', user_id, user_record)
+
+        wallet = get_or_create_wallet(user_id)
+        if wallet.get('lastUsageDate') != today_str:
+            wallet['dailyUsed'] = 0
+            wallet['lastUsageDate'] = today_str
+
+        free_used = int(user_record.get('free_requests_used', 0))
+        paid_credits = int(user_record.get('paid_credits', 0))
+        daily_used = int(wallet.get('dailyUsed', 0))
+
+        if not is_super and daily_used >= ai_daily_limit:
+            return JsonResponse({
+                'success': False,
+                'requirePayment': False,
+                'limitReached': True,
+                'reason': 'Daily AI generation limit reached',
+                'currentUsage': daily_used,
+                'maxAllowed': ai_daily_limit,
+                'remainingCredits': paid_credits,
+                'message': f'Daily AI usage limit ({daily_used}/{ai_daily_limit}) reached. Try again tomorrow.',
+            }, status=429)
+
+        if not is_super and ai_payment_req:
+            if free_used < ai_free_limit:
+                deducted_mode = 'free'
+                user_record['free_requests_used'] = free_used + 1
+            elif paid_credits > 0:
+                deducted_mode = 'paid'
+                user_record['paid_credits'] = paid_credits - 1
+            else:
+                return JsonResponse({
+                    'success': False,
+                    'requirePayment': True,
+                    'limitReached': True,
+                    'reason': 'AI generation quota exhausted',
+                    'message': f'You have used all {ai_free_limit} free AI generation(s) and have 0 paid credits remaining.',
+                    'currentUsage': free_used,
+                    'maxAllowed': ai_free_limit,
+                    'remainingCredits': 0,
+                    'price': ai_price,
+                    'aiCreditsPerPayment': ai_credits_pack,
+                    'freeLimit': ai_free_limit,
+                    'freeUsed': free_used,
+                    'paidCredits': 0,
+                })
+
+            upsert_collection_item('ai_usage', 'user_id', user_id, user_record)
+            wallet['dailyUsed'] = daily_used + 1
+            wallet['usedCredits'] = int(wallet.get('usedCredits', 0)) + 1
+            wallet['remainingCredits'] = int(user_record.get('paid_credits', 0)) + max(0, ai_free_limit - int(user_record.get('free_requests_used', 0)))
+            upsert_collection_item('ai_wallets', 'userId', user_id, wallet)
 
     try:
-        questions = generate_groq_questions(topic, int(count), difficulty)
-    except ValueError as e:
-        return JsonResponse({'success': False, 'detail': str(e), 'message': str(e)}, status=401)
+        gen_res = generate_groq_questions(topic, count, difficulty)
+        questions = gen_res['questions']
+        used_model = gen_res['model']
     except Exception as e:
-        return JsonResponse({'success': False, 'detail': str(e), 'message': str(e)}, status=502)
+        # Refund deducted credit atomically on AI service error
+        if not is_super and deducted_mode:
+            with _usage_lock:
+                usage_items = get_collection_items('ai_usage')
+                rec = next((u for u in usage_items if u.get('user_id') == user_id), None)
+                if rec:
+                    if deducted_mode == 'free':
+                        rec['free_requests_used'] = max(0, int(rec.get('free_requests_used', 1)) - 1)
+                    else:
+                        rec['paid_credits'] = int(rec.get('paid_credits', 0)) + 1
+                    upsert_collection_item('ai_usage', 'user_id', user_id, rec)
+        status_code = 401 if isinstance(e, ValueError) else 502
+        return JsonResponse({'success': False, 'detail': str(e), 'message': str(e)}, status=status_code)
 
     if not is_super:
-        if free_used < ai_free_limit:
-            user_record['free_requests_used'] = free_used + 1
-            req_type = 'free'
-            remaining_free = max(0, ai_free_limit - (free_used + 1))
-        else:
-            paid_credits = max(0, paid_credits - 1)
-            user_record['paid_credits'] = paid_credits
-            req_type = 'paid_credit'
-            remaining_free = 0
-        upsert_collection_item('ai_usage', 'user_id', user_id, user_record)
         insert_collection_item('ai_requests', {
             'user_id': user_id,
-            'type': req_type,
+            'type': deducted_mode or 'free',
+            'model': used_model,
             'status': 'SUCCESS',
             'topic': topic,
             'count': count,
             'created_at': _iso_now(),
         })
+        rem_paid = int(user_record.get('paid_credits', 0))
+        rem_free = max(0, ai_free_limit - int(user_record.get('free_requests_used', 0)))
+        if rem_paid == 0 and rem_free == 0 and ai_payment_req:
+            push_notification('AI Credits Exhausted', f'{user_id} has 0 AI credits remaining.', 'warning', user_id)
     else:
-        remaining_free = 999
+        rem_free = 999
+        rem_paid = 999
 
     return JsonResponse({
         'success': True,
         'questions': questions,
-        'freeRequestsRemaining': remaining_free,
-        'paidCreditsRemaining': paid_credits,
+        'model': used_model,
+        'freeRequestsRemaining': rem_free,
+        'paidCreditsRemaining': rem_paid,
     })
 
 
@@ -483,36 +557,64 @@ def py_payment_verify(request):
     if not all([order_id, payment_id, signature]):
         return JsonResponse({'detail': 'Missing payment verification details'}, status=400)
 
-    payments = get_collection_items('payments')
-    record = next((p for p in payments if p.get('order_id') == order_id), None)
-    if not record:
-        return JsonResponse({'detail': 'Order not found'}, status=404)
-    if record.get('status') == 'paid':
-        return JsonResponse({'detail': 'Payment already processed (Idempotency check)'}, status=400)
+    with _payment_lock:
+        payments = get_collection_items('payments')
+        record = next((p for p in payments if p.get('order_id') == order_id), None)
+        if not record:
+            return JsonResponse({'detail': 'Order not found'}, status=404)
+        if record.get('status') == 'paid':
+            return JsonResponse({'detail': 'Payment already processed (Idempotency check)'}, status=400)
 
-    try:
-        rzp_client.utility.verify_payment_signature({
-            'razorpay_order_id': order_id,
-            'razorpay_payment_id': payment_id,
-            'razorpay_signature': signature,
+        try:
+            rzp_client.utility.verify_payment_signature({
+                'razorpay_order_id': order_id,
+                'razorpay_payment_id': payment_id,
+                'razorpay_signature': signature,
+            })
+        except Exception:
+            upsert_collection_item('payments', 'order_id', order_id, {'status': 'failed', 'failed_at': _iso_now()})
+            from .billing_service import push_notification
+            push_notification('Payment Failed', f'AI payment verification failed for {order_id}', 'error')
+            return JsonResponse({'detail': 'Payment signature verification failed'}, status=400)
+
+        upsert_collection_item('payments', 'order_id', order_id, {
+            'status': 'paid',
+            'payment_id': payment_id,
+            'signature': signature,
+            'paid_at': _iso_now(),
         })
-    except Exception:
-        upsert_collection_item('payments', 'order_id', order_id, {'status': 'failed', 'failed_at': _iso_now()})
-        return JsonResponse({'detail': 'Payment signature verification failed'}, status=400)
 
-    upsert_collection_item('payments', 'order_id', order_id, {
-        'status': 'paid',
-        'payment_id': payment_id,
-        'signature': signature,
-        'paid_at': _iso_now(),
-    })
+        cfg = get_payment_config()
+        credits_pack = max(1, int(cfg.get('aiCreditsPerPayment', 5)))
+        user_id = user.get('userId') or user.get('name') or 'unknown'
 
-    user_id = user.get('userId') or user.get('name') or 'unknown'
+        # Allocate AI credits into ai_usage and ai_wallets atomically
+        with _usage_lock:
+            usage_items = get_collection_items('ai_usage')
+            rec = next((u for u in usage_items if u.get('user_id') == user_id), None)
+            if not rec:
+                rec = {'user_id': user_id, 'free_requests_used': 0, 'paid_credits': 0}
+            rec['paid_credits'] = int(rec.get('paid_credits', 0)) + credits_pack
+            upsert_collection_item('ai_usage', 'user_id', user_id, rec)
+
+            from .billing_service import adjust_wallet_credits, push_notification
+            adjust_wallet_credits(user_id, credits_pack, f'AI Pack Purchase ({order_id})', user_id)
+            push_notification('AI Credits Purchased', f'{user_id} purchased +{credits_pack} AI credits ({order_id})', 'success', user_id)
+
     try:
-        questions = generate_groq_questions(record.get('topic'), int(record.get('count', 5)), record.get('difficulty', 'medium'))
+        gen_res = generate_groq_questions(record.get('topic'), int(record.get('count', 5)), record.get('difficulty', 'medium'))
+        questions = gen_res['questions']
+        # Deduct 1 credit for this inline generation
+        with _usage_lock:
+            usage_items = get_collection_items('ai_usage')
+            rec = next((u for u in usage_items if u.get('user_id') == user_id), None)
+            if rec and int(rec.get('paid_credits', 0)) > 0:
+                rec['paid_credits'] = int(rec.get('paid_credits', 0)) - 1
+                upsert_collection_item('ai_usage', 'user_id', user_id, rec)
         insert_collection_item('ai_requests', {
             'user_id': user_id,
             'type': 'paid',
+            'model': gen_res['model'],
             'order_id': order_id,
             'payment_id': payment_id,
             'status': 'SUCCESS',
@@ -520,9 +622,44 @@ def py_payment_verify(request):
             'count': record.get('count'),
             'created_at': _iso_now(),
         })
-        return JsonResponse({'success': True, 'message': 'Payment successful and request sent successfully', 'questions': questions})
-    except Exception:
-        return JsonResponse({'success': False, 'message': 'Payment verified but question generation failed.', 'order_id': order_id})
+        return JsonResponse({
+            'success': True,
+            'message': f'Payment verified! +{credits_pack} AI credits added and questions generated.',
+            'questions': questions,
+            'creditsAdded': credits_pack,
+            'paidCreditsRemaining': int(rec.get('paid_credits', 0)) if rec else 0,
+        })
+    except Exception as e:
+        return JsonResponse({
+            'success': True,
+            'creditsOnly': True,
+            'message': f'Payment verified and +{credits_pack} AI credits added to your wallet. Generation note: {e}',
+            'order_id': order_id,
+            'creditsAdded': credits_pack,
+        })
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+def py_payment_mark_failed(request):
+    user = get_current_user(request)
+    if not user:
+        return JsonResponse({'detail': 'Unauthorized'}, status=401)
+    body = _json_body(request)
+    order_id = body.get('order_id')
+    if not order_id:
+        return JsonResponse({'detail': 'order_id required'}, status=400)
+    payments = get_collection_items('payments')
+    rec = next((p for p in payments if p.get('order_id') == order_id), None)
+    if rec and rec.get('status') != 'paid':
+        upsert_collection_item('payments', 'order_id', order_id, {
+            'status': 'failed',
+            'failureReason': body.get('reason', 'Payment cancelled or failed'),
+            'failed_at': _iso_now(),
+        })
+        from .billing_service import push_notification
+        push_notification('Payment Failed', f'Order {order_id} failed/cancelled by {user.get("name", "Admin")}', 'error')
+    return JsonResponse({'success': True})
 
 
 @csrf_exempt
@@ -552,6 +689,10 @@ def py_payment_settings(request):
         'aiPaymentRequired': _as_bool(data.get('aiPaymentRequired'), existing.get('aiPaymentRequired', True)),
         'aiFreeLimit': _as_int(data.get('aiFreeLimit'), existing.get('aiFreeLimit', 0)),
         'aiPrice': _as_int(data.get('aiPrice'), existing.get('aiPrice', 10)),
+        'aiCreditsPerPayment': _as_int(data.get('aiCreditsPerPayment'), existing.get('aiCreditsPerPayment', 5)),
+        'maxQuestionsPerGen': _as_int(data.get('maxQuestionsPerGen'), existing.get('maxQuestionsPerGen', 20)),
+        'aiDailyLimit': _as_int(data.get('aiDailyLimit'), existing.get('aiDailyLimit', 50)),
+        'groqModel': str(data.get('groqModel', existing.get('groqModel', 'llama-3.3-70b-versatile'))).strip(),
         'groqApiKey': str(data.get('groqApiKey', existing.get('groqApiKey', ''))).strip(),
         'updatedBy': user.get('name', 'superadmin'),
         'updatedAt': _iso_now(),
@@ -618,27 +759,38 @@ def py_quiz_start_create_order(request):
 
     body = _json_body(request)
     quiz_id = body.get('quizId', 'LOCAL')
+    coupon_code = str(body.get('couponCode') or '').strip().upper()
     cfg = get_payment_config()
     if not cfg.get('enabled', True):
         return JsonResponse({'detail': 'Payments are currently disabled'}, status=400)
 
+    user_id = user.get('userId') or user.get('name')
     base_amount = float(cfg.get('amount', 499))
     discount = float(cfg.get('discountPercent', 0))
-    amount_paise = int(base_amount * (1 - discount / 100.0) * 100)
+    final_amount = max(0.0, round(base_amount * (1 - discount / 100.0), 2))
+    if coupon_code:
+        from .billing_service import validate_coupon
+        ok, msg, discounted = validate_coupon(coupon_code, final_amount, user_id)
+        if not ok:
+            return JsonResponse({'detail': msg}, status=400)
+        final_amount = discounted
+
+    amount_paise = max(100, int(round(final_amount * 100)))
 
     try:
         order = rzp_client.order.create(data={
             'amount': amount_paise,
             'currency': 'INR',
             'receipt': f'qz_receipt_{uuid.uuid4().hex[:8]}',
-            'notes': {'user_id': user.get('userId') or user.get('name'), 'quiz_id': quiz_id, 'type': 'quiz_start'},
+            'notes': {'user_id': user_id, 'quiz_id': quiz_id, 'type': 'quiz_start', 'couponCode': coupon_code},
         })
         insert_collection_item('payments', {
             'order_id': order['id'],
-            'adminId': user.get('userId') or user.get('name'),
-            'user_id': user.get('userId') or user.get('name'),
+            'adminId': user_id,
+            'user_id': user_id,
             'amount': order['amount'],
             'currency': order['currency'],
+            'couponCode': coupon_code,
             'status': 'created',
             'type': 'quiz_start',
             'created_at': _iso_now(),
@@ -695,6 +847,13 @@ def py_quiz_start_verify(request):
         'paid_at': _iso_now(),
     })
 
+    applied_coupon = str(record.get('couponCode') or '').strip().upper()
+    if applied_coupon:
+        coupons = get_collection_items('coupons')
+        c = next((x for x in coupons if x.get('code') == applied_coupon), None)
+        if c:
+            upsert_collection_item('coupons', 'code', applied_coupon, {'usedCount': int(c.get('usedCount', 0)) + 1})
+
     cfg = get_payment_config()
     code = _generate_activation_code()
     admin_id = user.get('userId') or user.get('name')
@@ -715,6 +874,11 @@ def py_quiz_start_verify(request):
         'status': 'ACTIVE',
     }
     insert_collection_item('entitlements', ent)
+    try:
+        from .billing_service import push_notification
+        push_notification('Quiz License Purchased', f'{admin_id} activated {quizzes_per} quiz credits ({order_id})', 'success', admin_id)
+    except Exception:
+        pass
     return JsonResponse({
         'success': True,
         'message': 'Payment verified. License activated.',

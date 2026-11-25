@@ -1301,7 +1301,29 @@
   </div>
 
 
-  <script src="/static/js/storage.js"></script>
+  <!-- PAYMENT REQUIRED MODAL (AI LIMIT REACHED) -->
+<div class="modal-bg" id="modal-payment-required">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-head">
+      <h3><i class="bi bi-lock-fill text-warning me-2"></i> PAYMENT REQUIRED</h3>
+      <button class="modal-x" onclick="closeModal('modal-payment-required')">✕</button>
+    </div>
+    <div class="alert alert-warning py-2 px-3 text-xs fw-bold mb-3" id="pr-reason">AI generation limit reached.</div>
+    <div class="p-3 border rounded bg-light mb-3">
+      <div class="d-flex justify-content-between text-xs mb-2"><span class="text-muted fw-bold">CURRENT USAGE</span><strong id="pr-usage">0 / 0</strong></div>
+      <div class="d-flex justify-content-between text-xs mb-2"><span class="text-muted fw-bold">REMAINING CREDITS</span><strong class="text-danger" id="pr-rem">0</strong></div>
+      <div class="d-flex justify-content-between text-xs mb-2"><span class="text-muted fw-bold">PLAN PACK</span><strong class="text-primary" id="pr-pack">5 AI Credits</strong></div>
+      <div class="d-flex justify-content-between align-items-center pt-2 border-top"><span class="fw-bold">AMOUNT PAYABLE</span><span class="fs-4 fw-bold text-success" id="pr-price">₹10</span></div>
+    </div>
+    <div id="pr-status" class="text-xs fw-bold mb-3"></div>
+    <div class="d-flex gap-2">
+      <button class="btn-main btn-green" id="btn-pr-pay" onclick="proceedPaymentRequired()"><i class="bi bi-credit-card-fill"></i> PAY NOW</button>
+      <button class="btn-sm btn-gold hidden" id="btn-pr-retry" onclick="proceedPaymentRequired()"><i class="bi bi-arrow-repeat"></i> RETRY</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/storage.js"></script>
   <script src="/static/js/billing.js"></script>
   <script src="/static/js/admin.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>

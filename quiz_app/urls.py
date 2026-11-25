@@ -40,6 +40,7 @@ urlpatterns = [
     # Payments & Entitlements
     path('py-api/payment/create_order', api_views.py_payment_create_order),
     path('py-api/payment/verify', api_views.py_payment_verify),
+    path('py-api/payment/mark-failed', api_views.py_payment_mark_failed),
     path('py-api/payment-settings', api_views.py_payment_settings),
     path('py-api/quiz-start/create_order', api_views.py_quiz_start_create_order),
     path('py-api/quiz-start/verify', api_views.py_quiz_start_verify),
@@ -69,5 +70,6 @@ urlpatterns = [
     path('api/billing/audit', billing_views.billing_audit_list),
     path('api/billing/audit/export', billing_views.billing_audit_export),
     path('api/billing/invoice/<str:order_id>.pdf', billing_views.billing_invoice_pdf),
+    path('api/billing/webhook', billing_views.billing_webhook),
     path('api/billing/portal', billing_views.billing_portal),
 ]

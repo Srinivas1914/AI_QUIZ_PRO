@@ -389,6 +389,48 @@ def billing_invoice_pdf(request, order_id):
         return JsonResponse({'detail': str(e)}, status=404)
 
 
+@csrf_exempt
+@require_http_methods(['POST'])
+def billing_webhook(request):
+    import hashlib
+    import hmac
+    import os
+
+    sig = request.headers.get('X-Razorpay-Signature', '')
+    secret = os.getenv('RAZORPAY_WEBHOOK_SECRET') or os.getenv('RAZORPAY_KEY_SECRET', '')
+    raw_body = request.body or b''
+
+    verified = False
+    if secret and sig:
+        expected = hmac.new(secret.encode('utf-8'), raw_body, hashlib.sha256).hexdigest()
+        verified = hmac.compare_digest(expected, sig)
+
+    payload = _json_body(request)
+    event_name = payload.get('event', 'unknown')
+    insert_collection_item('webhook_logs', {
+        'id': f'WH-{uuid.uuid4().hex[:8].upper()}',
+        'event': event_name,
+        'verified': verified,
+        'status': 'PROCESSED' if verified else 'SIGNATURE_MISMATCH',
+        'createdAt': _iso_now(),
+    })
+
+    if not verified:
+        return JsonResponse({'success': False, 'detail': 'Invalid webhook signature'}, status=400)
+
+    entity = ((payload.get('payload') or {}).get('payment') or {}).get('entity') or {}
+    order_id = entity.get('order_id')
+    payment_id = entity.get('id')
+    if order_id:
+        if event_name == 'payment.captured':
+            upsert_collection_item('payments', 'order_id', order_id, {'status': 'paid', 'payment_id': payment_id, 'paid_at': _iso_now()})
+        elif event_name == 'payment.failed':
+            upsert_collection_item('payments', 'order_id', order_id, {'status': 'failed', 'failed_at': _iso_now()})
+            push_notification('Webhook: Payment Failed', f'Order {order_id} failed via Razorpay webhook', 'error')
+
+    return JsonResponse({'success': True, 'event': event_name})
+
+
 @require_http_methods(['GET'])
 def billing_portal(request):
     user = get_current_user(request)

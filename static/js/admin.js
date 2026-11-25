@@ -1509,10 +1509,11 @@ async function startRazorpayPayment(isFromSettings = false) {
         const sess = Store.getSession();
         const quizId = sess.quizId || "LOCAL";
         const token = localStorage.getItem('sq_token');
+        const couponCode = window._appliedCouponCode || '';
         const orderResp = await fetch('/py-api/quiz-start/create_order', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body: JSON.stringify({ quizId })
+            body: JSON.stringify({ quizId, couponCode })
         });
         const orderData = await orderResp.json();
         if (!orderData.success) {
@@ -1938,6 +1939,7 @@ function onAIRoundChange() {
         btn.textContent = `GENERATE QUESTIONS (BANK)`;
     }
 }
+let pendingAIRequest = null;
 async function generateAIQuestions() {
     const topic = $id('ai-topic').value.trim();
     const count = $id('ai-count').value;
@@ -1956,47 +1958,9 @@ async function generateAIQuestions() {
     preview.classList.add('hidden');
     try {
         const token = localStorage.getItem('sq_token');
-        // --- STEP 1: Check if AI payment is required via Python backend ---
-        let needsPayment = false;
-        try {
-            const checkResp = await fetch('/py-api/ai/generate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ topic, count, difficulty })
-            });
-            const checkContentType = checkResp.headers.get('content-type') || '';
-            if (checkContentType.includes('application/json')) {
-                const checkRes = await checkResp.json();
-                if (checkRes.requirePayment) {
-                    needsPayment = true;
-                }
-                else if (checkRes.success && checkRes.questions) {
-                    // Python backend returned questions directly — use them
-                    aiGeneratedResults = checkRes.questions;
-                    renderAIPreview();
-                    preview.classList.remove('hidden');
-                    setTimeout(() => preview.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
-                    toast(`Successfully generated ${aiGeneratedResults.length} questions!`, 'success');
-                    return;
-                }
-            }
-        }
-        catch (pyErr) {
-            // Python backend unreachable — that's OK, fall through to Node.js
-            console.warn('[AI] Python backend unreachable, using Node.js direct:', pyErr.message);
-        }
-        if (needsPayment) {
-            toast('Payment required for AI Question Generation. Proceeding to payment...', 'warning');
-            await handleRazorpayPayment(topic, count, difficulty);
-            return;
-        }
-        // --- STEP 2: Use Node.js direct endpoint (always available) ---
-        const resp = await fetch('/api/ai/generate', {
+        const resp = await fetch('/py-api/ai/generate', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            },
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({ topic, count, difficulty })
         });
         const contentType = resp.headers.get('content-type') || '';
@@ -2004,6 +1968,25 @@ async function generateAIQuestions() {
             throw new Error('Server returned an invalid response. Please check your Groq API key.');
         }
         const res = await resp.json();
+        if (res.requirePayment) {
+            pendingAIRequest = { topic, count, difficulty };
+            if ($id('pr-reason'))
+                $id('pr-reason').textContent = res.message || 'AI generation quota exhausted.';
+            if ($id('pr-usage'))
+                $id('pr-usage').textContent = `${res.currentUsage ?? 0} / ${res.maxAllowed ?? 0}`;
+            if ($id('pr-rem'))
+                $id('pr-rem').textContent = String(res.remainingCredits ?? 0);
+            if ($id('pr-pack'))
+                $id('pr-pack').textContent = `${res.aiCreditsPerPayment ?? 5} AI Generation Credits`;
+            if ($id('pr-price'))
+                $id('pr-price').textContent = `₹${res.price ?? 10}`;
+            if ($id('pr-status'))
+                $id('pr-status').innerHTML = '';
+            $id('btn-pr-retry')?.classList.add('hidden');
+            openModal('modal-payment-required');
+            toast('Usage limit reached. Payment required to continue.', 'warning');
+            return;
+        }
         if (!res.success) {
             throw new Error(res.message || res.detail || 'Generation failed');
         }
@@ -2012,6 +1995,7 @@ async function generateAIQuestions() {
         preview.classList.remove('hidden');
         setTimeout(() => preview.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
         toast(`Successfully generated ${aiGeneratedResults.length} questions!`, 'success');
+        loadAdminPayments();
     }
     catch (e) {
         err.textContent = 'AI Generation Error: ' + e.message;
@@ -2021,6 +2005,12 @@ async function generateAIQuestions() {
         btn.disabled = false;
         loader.classList.add('hidden');
     }
+}
+async function proceedPaymentRequired() {
+    if (!pendingAIRequest)
+        return;
+    closeModal('modal-payment-required');
+    await handleRazorpayPayment(pendingAIRequest.topic, pendingAIRequest.count, pendingAIRequest.difficulty);
 }
 async function handleRazorpayPayment(topic, count, difficulty) {
     const btn = $id('btn-ai-gen');
@@ -2072,11 +2062,17 @@ async function handleRazorpayPayment(topic, count, difficulty) {
                     const verifyData = await verifyResp.json();
                     if (!verifyData.success)
                         throw new Error(verifyData.detail || verifyData.message || 'Payment verification failed');
-                    aiGeneratedResults = verifyData.questions;
+                    loadAdminPayments();
+                    if (verifyData.creditsOnly) {
+                        toast(verifyData.message || 'Credits added! Re-checking and generating...', 'success');
+                        await generateAIQuestions();
+                        return;
+                    }
+                    aiGeneratedResults = verifyData.questions || [];
                     renderAIPreview();
                     preview.classList.remove('hidden');
                     setTimeout(() => preview.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
-                    toast(`Payment successful! Generated ${aiGeneratedResults.length} questions!`, 'success');
+                    toast(verifyData.message || `Payment successful! Generated ${aiGeneratedResults.length} questions!`, 'success');
                 }
                 catch (e) {
                     err.textContent = 'Verification Error: ' + e.message;
@@ -2087,18 +2083,42 @@ async function handleRazorpayPayment(topic, count, difficulty) {
                     btn.disabled = false;
                 }
             },
+            modal: {
+                ondismiss: async function () {
+                    await fetch('/py-api/payment/mark-failed', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                        body: JSON.stringify({ order_id: orderData.order_id, reason: 'Checkout dismissed by user' })
+                    }).catch(() => { });
+                    if ($id('pr-status'))
+                        $id('pr-status').innerHTML = '<span class="text-warning">Payment cancelled. No credits were added.</span>';
+                    $id('btn-pr-retry')?.classList.remove('hidden');
+                    openModal('modal-payment-required');
+                    loader.classList.add('hidden');
+                    btn.disabled = false;
+                }
+            },
             prefill: {
                 name: "User",
                 email: "user@example.com",
                 contact: "9999999999"
             },
             theme: {
-                color: "#d4af37"
+                color: "#4f46e5"
             }
         };
         const rzp = new window.Razorpay(options);
-        rzp.on('payment.failed', function (response) {
+        rzp.on('payment.failed', async function (response) {
+            await fetch('/py-api/payment/mark-failed', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ order_id: orderData.order_id, reason: response?.error?.description || 'Payment failed' })
+            }).catch(() => { });
             err.textContent = 'Payment Failed: ' + response.error.description;
+            if ($id('pr-status'))
+                $id('pr-status').innerHTML = `<span class="text-danger">Payment Failed: ${response.error.description}</span>`;
+            $id('btn-pr-retry')?.classList.remove('hidden');
+            openModal('modal-payment-required');
             toast('Payment Failed', 'error');
             loader.classList.add('hidden');
             btn.disabled = false;

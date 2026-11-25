@@ -7,13 +7,35 @@
   }
 
   async function apiGet(url: string): Promise<any> {
-    const r = await fetch(url, { headers: authHeaders() });
-    return r.json();
+    try {
+      const r = await fetch(url, { headers: authHeaders() });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = data.detail || data.message || `Request failed (HTTP ${r.status})`;
+        if (typeof toast === 'function') toast(msg, 'error');
+        return { success: false, detail: msg, ...data };
+      }
+      return data;
+    } catch (e: any) {
+      if (typeof toast === 'function') toast('Network error: ' + (e?.message || 'Unable to reach server'), 'error');
+      return { success: false, detail: 'Network error' };
+    }
   }
 
   async function apiPost(url: string, body: any): Promise<any> {
-    const r = await fetch(url, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
-    return r.json();
+    try {
+      const r = await fetch(url, { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = data.detail || data.message || `Request failed (HTTP ${r.status})`;
+        if (typeof toast === 'function') toast(msg, 'error');
+        return { success: false, detail: msg, ...data };
+      }
+      return data;
+    } catch (e: any) {
+      if (typeof toast === 'function') toast('Network error: ' + (e?.message || 'Unable to reach server'), 'error');
+      return { success: false, detail: 'Network error' };
+    }
   }
 
   // ─── SUPERADMIN ENTERPRISE BILLING LOADER ──────────────────────
@@ -465,10 +487,11 @@
     const resEl = $id('portal-coupon-res');
     if (!code) return;
     const res = await apiPost('/api/billing/coupons/validate', { code });
+    (window as any)._appliedCouponCode = res.success ? code.toUpperCase() : '';
     if (resEl) {
       resEl.innerHTML = res.success
         ? `<span class="text-success fw-bold">✓ ${res.message} Final Price: ₹${res.finalAmount}</span>`
-        : `<span class="text-danger fw-bold">✕ ${res.message}</span>`;
+        : `<span class="text-danger fw-bold">✕ ${res.message || res.detail || 'Invalid coupon'}</span>`;
     }
   };
 
