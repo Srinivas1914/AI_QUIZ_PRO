@@ -49,7 +49,7 @@ def generate_groq_questions(topic: str, count: int, difficulty: str = 'medium') 
         '{"questions": [{"text":"...","options":["A","B","C","D"],"correct":[0],"explanation":"..."}]}'
     )
 
-    models = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768']
+    models = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']
     last_err = None
 
     for api_key in api_keys:
