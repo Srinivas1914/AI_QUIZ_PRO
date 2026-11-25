@@ -775,30 +775,13 @@
                 <button type="button" class="btn-sm btn-cyan" onclick="toggleGroqKeyVisibility()"><i class="bi bi-eye"></i></button>
                 <button type="button" class="btn-sm btn-green" onclick="testGroqKey()"><i class="bi bi-plug-fill"></i> TEST KEY</button>
               </div>
-              <div class="frow">
-                <div class="form-group"><label>AI FREE GENERATION LIMIT (0 = Always Require Payment)</label><input
-                    type="number" id="pay-set-ai-free" value="0" min="0"></div>
-                <div class="form-group"><label>AI QUESTION GENERATION PRICE (₹)</label><input type="number"
-                    id="pay-set-ai-price" value="10" min="0" oninput="renderQuizPlansPreview()"></div>
-              </div>
-              <div class="form-group">
-                <label>GROQ API KEY (AI Generation)</label>
-                <div class="d-flex gap-2">
-                  <input type="password" id="pay-set-groq" placeholder="gsk_..." style="flex:1">
-                  <button type="button" class="btn-sm btn-cyan" onclick="toggleGroqKeyVisibility()"><i
-                      class="bi bi-eye"></i></button>
-                  <button type="button" class="btn-sm btn-green" onclick="testGroqKey()"><i class="bi bi-plug-fill"></i>
-                    TEST KEY</button>
-                </div>
-                <div id="groq-key-test-status" class="text-xs mt-1"></div>
-                <div class="text-xs text-muted mt-1">Used by Django AI Service (`llama-3.3-70b-versatile`) for
-                  generating MCQs.</div>
-              </div>
-              <button class="btn-main mt-2" onclick="savePaymentSettings()"><i class="bi bi-save"></i> SAVE AI
-                SETTINGS</button>
+              <div id="groq-key-test-status" class="text-xs mt-1"></div>
+              <div class="text-xs text-muted mt-1">Used by Django AI Service (<code>llama-3.3-70b-versatile</code>) for generating MCQs.</div>
             </div>
+            <button class="btn-main mt-2" onclick="savePaymentSettings()"><i class="bi bi-save"></i> SAVE AI SETTINGS</button>
           </div>
         </div>
+      </div>
 
         <!-- TAB 4: QUIZ PLANS -->
         <div class="pay-pane" id="ppane-plans">
