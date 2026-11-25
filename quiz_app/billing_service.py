@@ -7,9 +7,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import razorpay
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
 
 from .db import (
     get_collection_items,
@@ -521,6 +518,9 @@ def generate_invoice_pdf_bytes(order_id: str, billing_address: Optional[Dict[str
     sgst = round(gst_inr - cgst, 2)
 
     inv_no = f"INV-{datetime.now().strftime('%Y%m')}-{str(p.get('order_id', '0000'))[-6:].upper()}"
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     w, h = A4
