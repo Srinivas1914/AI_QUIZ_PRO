@@ -9,3 +9,8 @@ scratch/
 python_backend/venv/
 python_backend/__pycache__/
 python_backend/.env
+
+db.sqlite3
+staticfiles/
+__pycache__/
+*.pyc

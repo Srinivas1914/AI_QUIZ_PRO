@@ -1,13 +1,15 @@
 services:
   - type: web
     name: ai-quiz-platform
-    env: node
+    env: python
     plan: free
     buildCommand: chmod +x build.sh && ./build.sh
-    startCommand: node server.js
+    startCommand: gunicorn quiz_project.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4
     envVars:
-      - key: NODE_VERSION
-        value: 18.0.0
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: RENDER
+        value: "true"
       - key: MONGODB_URI
         sync: false
       - key: GROQ_API_KEY
